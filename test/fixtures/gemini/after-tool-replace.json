@@ -1,0 +1,18 @@
+{
+  "session_id": "8b2f7c4e-1d3a-4f5b-9e6c-7a8d9b0c1e2f",
+  "transcript_path": "/home/user/.gemini/tmp/3f1c/chats/session-2026-10-20T10-00-8b2f7c4e.json",
+  "cwd": "/home/user/project",
+  "hook_event_name": "AfterTool",
+  "timestamp": "2026-10-20T10:02:00.000Z",
+  "tool_name": "replace",
+  "tool_input": {
+    "file_path": "/home/user/project/hello.txt",
+    "instruction": "Capitalize the second line.",
+    "old_string": "two",
+    "new_string": "TWO"
+  },
+  "tool_response": {
+    "llmContent": "Successfully modified file: /home/user/project/hello.txt (1 replacements).",
+    "returnDisplay": "hello.txt"
+  }
+}

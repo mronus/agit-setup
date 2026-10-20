@@ -103,7 +103,7 @@ run () {
 # Check that the fake claude was called, in the directory $1, with the
 # arguments $2.
 called () {
-	grep -qxF "$1: $2" "$calls" || fail "claude not called in $1 with: $2"
+	grep -qxF "$1: $2" "$calls" || fail "not called in $1 with: $2"
 }
 
 echo "== --help"
@@ -380,6 +380,97 @@ git config --file "$conf" --get-all agent.cursor.install && fail "cursor: record
 rm -rf "$HOME/.cursor" "$tmp/project/.cursor"
 ok "a Cursor hooks file with comments"
 
+echo "== add gemini"
+# A gemini that records its arguments, links one extension, and prints
+# the list of extensions on its standard error, as Gemini CLI does.
+cat >"$tmp/bin/gemini" <<EOF
+#!/bin/sh
+echo "\$(pwd -P): \$* (trust=\$GEMINI_CLI_TRUST_WORKSPACE)" >>"$calls"
+test -t 0 && echo "terminal: \$*" >>"$stdin"
+state="$tmp/gemini-linked"
+case "\$*" in
+--version) echo "0.99.0" ;;
+"extensions link "*" --consent")
+	echo "\$3" >"\$state"
+	echo 'Extension "agit" linked successfully and enabled.' ;;
+"extensions uninstall agit")
+	rm -f "\$state" ;;
+"extensions list --output-format json")
+	if test -s "\$state"
+	then
+		jq -n --arg s "\$(cat "\$state")" '[{name: "agit", version: "0.1.0",
+			installMetadata: {source: \$s, type: "link"}}]' >&2
+	else
+		echo '[]' >&2
+	fi ;;
+esac
+exit 0
+EOF
+chmod +x "$tmp/bin/gemini"
+cd "$tmp/project"
+: >"$calls"
+run 0 add gemini --yes
+called "$tmp/project" "extensions link $root/extensions/gemini --consent (trust=true)"
+grep -q "done: Gemini CLI records" "$tmp/out" || fail "gemini: the self-check did not pass"
+test "$(git config --file "$conf" --get-all agent.gemini.install)" = user ||
+fail "gemini: the install was not recorded"
+: >"$calls"
+run 0 add gemini --yes
+grep -q "extensions link" "$calls" && fail "gemini: linked twice"
+grep -q "linked already" "$tmp/out" || fail "gemini: no word about the link"
+ok "add gemini"
+
+echo "== add gemini, project scope"
+mkdir -p "$tmp/project/.gemini"
+gemini_file=$tmp/project/.gemini/settings.json
+cat >"$gemini_file" <<'EOF'
+{
+  "ui": { "theme": "GitHub" },
+  "hooks": {
+    "BeforeTool": [
+      { "matcher": "write_file", "hooks": [{ "name": "lint", "type": "command", "command": "./lint.sh" }] }
+    ]
+  }
+}
+EOF
+cp "$gemini_file" "$tmp/gemini-original.json"
+run 0 add gemini --scope project --yes
+# The hooks of the extension, with the path of agit-hook.
+jq --arg h "$root/bin/agit-hook" '.hooks | map_values(map(.hooks |= map(.command |=
+	sub("\\$\\{extensionPath\\}/../../bin/agit-hook"; $h))))' \
+	"$root/extensions/gemini/hooks/hooks.json" >"$tmp/gemini-want.json"
+jq -e --slurpfile w "$tmp/gemini-want.json" '.ui == {theme: "GitHub"}
+	and .hooks.BeforeTool[0].hooks[0].name == "lint"
+	and .hooks.BeforeTool[1:] == $w[0].BeforeTool
+	and .hooks.AfterTool == $w[0].AfterTool
+	and .hooks.SessionStart == $w[0].SessionStart' "$gemini_file" >/dev/null ||
+fail "gemini: unexpected project settings: $(cat "$gemini_file")"
+run 0 status gemini
+grep -qF "extension agit: link $root/extensions/gemini" "$tmp/out" || fail "status gemini, extension"
+grep -qF "$gemini_file: agit hooks for AfterTool, BeforeTool, SessionEnd, SessionStart" "$tmp/out" ||
+fail "status gemini, project"
+ok "add gemini, project scope"
+
+echo "== remove gemini"
+: >"$calls"
+cd "$tmp"
+run 0 remove gemini
+called "$tmp" "extensions uninstall agit (trust=true)"
+test "$(jq -S . "$gemini_file")" = "$(jq -S . "$tmp/gemini-original.json")" ||
+fail "gemini: remove did not restore the settings: $(cat "$gemini_file")"
+git config --file "$conf" --get-all agent.gemini.install && fail "gemini: still recorded"
+ok "remove gemini"
+
+echo "== another extension named agit"
+echo "/somewhere/else" >"$tmp/gemini-linked"
+run 1 add gemini --yes
+grep -q "another Gemini CLI extension named agit" "$tmp/out" || fail "gemini: no word about the other extension"
+: >"$calls"
+run 0 remove gemini
+grep -q "uninstall" "$calls" && fail "gemini: uninstalled an extension it did not link"
+rm -f "$tmp/gemini-linked"
+ok "another extension named agit"
+
 echo "== errors"
 run 1 add
 run 1 add claude-code --transcripts --yes
@@ -403,6 +494,11 @@ then
 fi
 cat "$tmp/out"
 grep -q "claude is not on PATH" "$tmp/out" || fail "no message without claude"
+if PATH=$tmp/no-claude /bin/sh "$setup" add gemini --yes >"$tmp/out" 2>&1
+then
+	fail "add succeeded without gemini"
+fi
+grep -q "gemini is not on PATH" "$tmp/out" || fail "no message without gemini"
 rm "$tmp/no-claude/jq"
 if PATH=$tmp/no-claude /bin/sh "$setup" add claude-code --yes >"$tmp/out" 2>&1
 then
@@ -411,6 +507,12 @@ fi
 cat "$tmp/out"
 grep -q "the hooks need jq" "$tmp/out" || fail "no message without jq"
 ok "errors"
+
+if test -s "$stdin"
+then
+	cat "$stdin"
+	fail "an agent ran with the stdin of agit-setup"
+fi
 
 if test $failures -gt 0
 then

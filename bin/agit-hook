@@ -7,12 +7,12 @@
 #   agit-hook <agent> <event>   < hook input (JSON)
 #
 # <agent> names the agent whose hook input is read: "claude" (Claude
-# Code), "codex" (Codex CLI) or "cursor" (Cursor).  Each agent has a
-# function input_<agent> that maps its input to the variables tool,
-# sid, cwd, path, cmd, transcript and model, and, for the agents that
-# take a session context, context_<agent>, which prints it in their
-# form; summary_<agent> and model_<agent>, for agents whose transcript
-# format is documented, read it.
+# Code), "codex" (Codex CLI), "cursor" (Cursor) or "gemini" (Gemini
+# CLI).  Each agent has a function input_<agent> that maps its input to
+# the variables tool, sid, cwd, path, cmd, transcript and model, and,
+# for the agents that take a session context, context_<agent>, which
+# prints it in their form; summary_<agent> and model_<agent>, for
+# agents whose transcript format is documented, read it.
 #
 # Events:
 #
@@ -309,6 +309,28 @@ input_cursor () {
 	remember_cwd=1
 }
 
+# Gemini CLI: hook input fields to variables
+# (https://geminicli.com/docs/hooks/reference/).  write_file and replace
+# name their file in tool_input.file_path; run_shell_command runs in
+# tool_input.dir_path, relative to the directory of the session, if
+# given.  The hook input has no model, and the transcript format is not
+# documented.
+# shellcheck disable=SC2317 # called as input_$agent
+input_gemini () {
+	tool=gemini-cli
+	vars=$(printf '%s' "$input" | jq -r '
+		def s: if type == "string" then . else "" end;
+		(.cwd | s) as $cwd
+		| (.tool_input.dir_path | s) as $d
+		| [(.session_id | s),
+		   (if $d == "" then $cwd elif ($d | startswith("/")) then $d
+		    else $cwd + "/" + $d end),
+		   (.tool_input.file_path | s), (.tool_input.command | s)]
+		| @sh' 2>/dev/null) || return 1
+	eval "set -- $vars"
+	sid=$1 cwd=$2 path=$3 cmd=$4 transcript='' model=''
+}
+
 # The model of the last message of the agent in the transcript lines
 # on stdin.
 # shellcheck disable=SC2317 # called as model_$agent
@@ -324,9 +346,14 @@ context_claude () {
 		'{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}' >&3
 }
 
-# Codex takes the output of Claude Code.
+# Codex and Gemini CLI take the output of Claude Code.
 # shellcheck disable=SC2317 # called as context_$agent
 context_codex () {
+	context_claude "$@"
+}
+
+# shellcheck disable=SC2317 # called as context_$agent
+context_gemini () {
 	context_claude "$@"
 }
 
@@ -587,7 +614,7 @@ main () {
 		exit 0
 	fi
 	case "$agent" in
-	claude|codex|cursor) ;;
+	claude|codex|cursor|gemini) ;;
 	*) log "unknown agent"; exit 0 ;;
 	esac
 	input=$(cat)

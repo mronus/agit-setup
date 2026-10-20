@@ -13,7 +13,7 @@ log=$home/log/hook.log
 GIT=${AGIT_GIT:-git}
 plugin=agit@agit-setup
 marketplace=agit-setup
-agents="claude-code codex cursor"
+agents="claude-code codex cursor gemini"
 no_agit="is not agit; this session records nothing"
 
 usage () {
@@ -30,12 +30,12 @@ they wrote them, are recorded in the provenance of your commits.
 Without a command, ask which agents to connect and how.
 
 Agents: claude-code (Claude Code), codex (Codex CLI), cursor (Cursor:
-its editor and its agent command).
+its editor and its agent command), gemini (Gemini CLI).
 
     --scope user         record in all your projects (default)
     --scope project      record in the project in the current directory,
                          for everyone who works on it with the agent
-                         (Claude Code, Cursor)
+                         (Claude Code, Cursor, Gemini CLI)
     --scope local        record in the project in the current directory,
                          for you only (Claude Code)
     --no-shell           do not record the edits that the agent makes
@@ -163,6 +163,7 @@ agent_name () {
 	claude-code) echo "Claude Code" ;;
 	codex) echo "Codex" ;;
 	cursor) echo "Cursor" ;;
+	gemini) echo "Gemini CLI" ;;
 	esac
 }
 
@@ -170,7 +171,7 @@ agent_name () {
 agent_scopes () {
 	case "$1" in
 	claude-code) echo "user project local" ;;
-	cursor) echo "user project" ;;
+	cursor|gemini) echo "user project" ;;
 	*) echo "user" ;;
 	esac
 }
@@ -642,6 +643,162 @@ $files
 EOF
 }
 
+# --- Gemini CLI: the extension of this repository --------------------
+#
+# https://geminicli.com/docs/extensions/reference/.  For all projects,
+# extensions/gemini is linked with gemini extensions link, which keeps
+# it in sync with upgrades of this directory; for one project, its hooks
+# go in the .gemini/settings.json of the project.
+
+gemini_ext=agit
+
+# Run gemini with its stdin from /dev/null, and the workspace trusted
+# for this command only: extensions link asks to trust the current
+# directory otherwise.
+run_gemini () {
+	GEMINI_CLI_TRUST_WORKSPACE=true gemini "$@" </dev/null
+}
+
+need_gemini () {
+	command -v gemini >/dev/null 2>&1 && return 0
+	warn "gemini is not on PATH; install Gemini CLI and run" \
+		"agit-setup add gemini again"
+	return 1
+}
+
+# Print the install type and source of the extension $gemini_ext, if
+# it is installed.  Gemini CLI prints the list on its standard error.
+gemini_linked () {
+	(cd "$dir" && run_gemini extensions list --output-format json 2>&1) |
+	sed -n '/^\[/,/^\]$/p' |
+	jq -r --arg n "$gemini_ext" '.[]? | select(.name == $n)
+		| "\(.installMetadata.type // "") \(.installMetadata.source // "")"' 2>/dev/null
+}
+
+gemini_project_file () {
+	echo "$dir/.gemini/settings.json"
+}
+
+# The hooks of the extension, for the settings of a project.
+gemini_hooks () {
+	# shellcheck disable=SC2016 # the variable of Gemini CLI
+	render "$root/extensions/gemini/hooks/hooks.json" \
+		'${extensionPath}/../../bin/agit-hook'
+}
+
+# shellcheck disable=SC2317 # called as detect_$(fn agent)
+detect_gemini () {
+	found=
+	if command -v gemini >/dev/null 2>&1
+	then
+		found=$(command -v gemini)
+		return 0
+	fi
+	test -d "$HOME/.gemini" && found="$HOME/.gemini, but gemini is not on PATH"
+	return 1
+}
+
+# shellcheck disable=SC2317 # called as add_$(fn agent)
+add_gemini () {
+	if test "$scope" = project
+	then
+		new=$(gemini_hooks) || return 1
+		edit_hooks gemini "$(gemini_project_file)" add "$new" || return 1
+		record gemini "project:$(gemini_project_file)"
+		return
+	fi
+	need_gemini || return 1
+	linked=$(gemini_linked)
+	case "$linked" in
+	"link $root/extensions/gemini")
+		say "the Gemini CLI extension $gemini_ext is linked already" ;;
+	'')
+		say "linking the Gemini CLI extension $gemini_ext from $root/extensions/gemini"
+		(cd "$dir" && run_gemini extensions link "$root/extensions/gemini" --consent) ||
+		return 1 ;;
+	*)
+		warn "another Gemini CLI extension named $gemini_ext is installed" \
+			"($linked); remove it with: gemini extensions uninstall $gemini_ext"
+		return 1 ;;
+	esac
+	record gemini user
+}
+
+# shellcheck disable=SC2317 # called as remove_$(fn agent)
+remove_gemini () {
+	status=0
+	while IFS= read -r entry
+	do
+		case "$entry" in
+		user)
+			need_gemini || { status=1; continue; }
+			case "$(gemini_linked)" in
+			"link $root/extensions/gemini")
+				say "uninstalling the Gemini CLI extension $gemini_ext"
+				(cd "$dir" && run_gemini extensions uninstall "$gemini_ext") ||
+				status=1 ;;
+			'')
+				say "the Gemini CLI extension $gemini_ext is not installed" ;;
+			*)
+				warn "the Gemini CLI extension $gemini_ext was not linked by" \
+					"agit-setup; leaving it" ;;
+			esac ;;
+		project:*)
+			edit_hooks gemini "${entry#*:}" remove || status=1 ;;
+		esac
+	done <<EOF
+$(installs gemini user)
+EOF
+	"$GIT" config --file "$conf" --unset-all agent.gemini.install 2>/dev/null
+	return $status
+}
+
+# shellcheck disable=SC2317 # called as check_$(fn agent)
+check_gemini () {
+	if test "$scope" = project
+	then
+		if has_hooks gemini "$(gemini_project_file)" "$(gemini_hooks)"
+		then
+			say "done: Gemini CLI records its edits in $dir with agit from its"
+			say "next session, once the folder is trusted."
+			return 0
+		fi
+		warn "$(gemini_project_file) does not have the agit hooks"
+		return 1
+	fi
+	if test "$(gemini_linked)" = "link $root/extensions/gemini"
+	then
+		say "done: Gemini CLI records its edits with agit from its next session"
+	else
+		warn "gemini extensions list does not show $gemini_ext linked from" \
+			"$root/extensions/gemini"
+		return 1
+	fi
+}
+
+# shellcheck disable=SC2317 # called as status_$(fn agent)
+status_gemini () {
+	if ! detect_gemini
+	then
+		say "Gemini CLI:   ${found:-not found}"
+		return
+	fi
+	say "Gemini CLI:   $found ($(run_gemini --version 2>/dev/null))"
+	linked=$(gemini_linked)
+	if test -n "$linked"
+	then
+		say "  extension $gemini_ext: $linked"
+	else
+		say "  extension $gemini_ext: not installed"
+	fi
+	installs gemini '' | while IFS= read -r entry
+	do
+		case "$entry" in
+		project:*) hooks_status gemini "${entry#*:}" ;;
+		esac
+	done
+}
+
 # --- Commands --------------------------------------------------------
 
 # Die unless $1 names an agent.
@@ -692,10 +849,10 @@ cmd_add () {
 	esac
 	dir=$(pwd -P)
 	need_jq
-	if test "$agent" = claude-code
-	then
-		need_claude || exit 1
-	fi
+	case "$agent:$scope" in
+	claude-code:*) need_claude || exit 1 ;;
+	gemini:user) need_gemini || exit 1 ;;
+	esac
 	check_agit
 	selected=$agent
 	eval "scope_$(fn "$agent")=\$scope"

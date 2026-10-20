@@ -631,6 +631,68 @@ rm -f "$AGIT_HOME/log/hook.log"
 ag=claude
 sid=test-session
 
+echo "== Gemini CLI"
+ag=gemini
+sid=8b2f7c4e-1d3a-4f5b-9e6c-7a8d9b0c1e2f
+new_repo gemini
+ge=$tmp/gemini
+mkdir -p "$ge/sub"
+# gemini_tool <event> <fixture> <jq filter> <jq args>...: a tool hook.
+gemini_tool () {
+	ev=$1 fx=$2 filter=$3
+	shift 3
+	fixture "$fx" ".session_id = \$s | .cwd = \$c | $filter" \
+		--arg s "$sid" --arg c "$ge" "$@" | run_hook "$ev"
+}
+fixture session-start '.session_id = $s | .cwd = $c' --arg s "$sid" --arg c "$ge" |
+run_hook session-start
+if ! jq -r .hookSpecificOutput.additionalContext "$tmp/out" |
+   grep -qF "git stamp reason --session $sid --summary -"
+then
+	fail "gemini session-start: $(cat "$tmp/out")"
+fi
+# write_file of a new file, with a relative path.
+gemini_tool pre-edit before-tool-write-file '.tool_input.file_path = "sub/new.txt"'
+printf 'new by gemini\n' >"$ge/sub/new.txt"
+gemini_tool post-edit after-tool-write-file '.tool_input.file_path = "sub/new.txt"'
+# replace in an existing file.
+gemini_tool pre-edit before-tool-replace '.tool_input.file_path = $f' --arg f "$ge/hello.txt"
+printf 'one\nTWO by gemini\nthree\n' >"$ge/hello.txt"
+gemini_tool post-edit after-tool-replace '.tool_input.file_path = $f' --arg f "$ge/hello.txt"
+# A shell command in a subdirectory.
+gemini_tool pre-shell before-tool-run-shell-command \
+	'.tool_input.command = "echo x >made.txt" | .tool_input.dir_path = "sub"'
+echo "made by a command" >"$ge/sub/made.txt"
+gemini_tool post-shell after-tool-run-shell-command \
+	'.tool_input.command = "echo x >made.txt" | .tool_input.dir_path = "sub"'
+journal "$ge"
+test "$(journal "$ge" | grep -c "^begin .* $sid .* tool=gemini-cli$")" = 3 ||
+fail "gemini: expected 3 begin entries with the tool"
+echo "by a human" >>"$ge/hello.txt"
+"$GIT" -C "$ge" add -A
+"$GIT" -C "$ge" commit -q -m gemini
+"$GIT" -C "$ge" provenance show HEAD
+test "$(marks "$ge" sub/new.txt)" = "1 AI" || fail "gemini new.txt: $(marks "$ge" sub/new.txt)"
+test "$(marks "$ge" hello.txt)" = "2 AI
+4 HUMAN" || fail "gemini hello.txt: $(marks "$ge" hello.txt)"
+test "$(marks "$ge" sub/made.txt)" = "1 AI" || fail "gemini made.txt: $(marks "$ge" sub/made.txt)"
+"$GIT" -C "$ge" provenance show HEAD | grep -q "tool=gemini-cli session=$sid" ||
+fail "gemini: no actor with the tool"
+ok "gemini edits and shell commands"
+mkdir -p "$tmp/gemini-outside"
+fixture before-tool-write-file '.session_id = $s | .cwd = $c | .tool_input.file_path = "x.txt"' \
+	--arg s "$sid" --arg c "$tmp/gemini-outside" | run_hook pre-edit
+for ev in session-start pre-edit post-edit pre-shell post-shell session-end
+do
+	printf '{"session_id": ' | run_hook "$ev"
+done
+test -z "$(journal "$ge")" || fail "gemini stamps: $(journal "$ge")"
+fixture session-end '.session_id = $s | .cwd = $c' --arg s "$sid" --arg c "$ge" |
+run_hook session-end
+ok "gemini: nothing outside a repository, malformed input"
+ag=claude
+sid=test-session
+
 echo "== session-end"
 hook session-end "$repo"
 test -e "$AGIT_HOME/run/claude/$sid" && fail "session-end left the state file"
