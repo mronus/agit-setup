@@ -389,7 +389,8 @@ connect_agents () {
 		esac
 	fi
 	say ""
-	say "to connect your coding agents (Claude Code) to agit, run"
+	say "to connect your coding agents (Claude Code, Codex, Cursor, Gemini CLI)"
+	say "to agit, run"
 	say "    agit-setup"
 	say "in a new shell"
 }
