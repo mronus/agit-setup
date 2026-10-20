@@ -36,10 +36,21 @@ ok () {
 }
 
 # A claude that records "<directory>: <arguments>" and keeps the
-# installed scopes in a file, for plugin list --json.
+# installed scopes in a file, for plugin list --json.  It also records
+# in $stdin when its stdin is a terminal or has anything to read: the
+# real claude (Bun) fails on macOS with "EINVAL: invalid argument,
+# kqueue" when its stdin is /dev/tty, as it is under curl | sh.
+stdin=$tmp/claude-stdin
 cat >"$tmp/bin/claude" <<EOF
 #!/bin/sh
 echo "\$(pwd -P): \$*" >>"$calls"
+if test -t 0
+then
+	echo "terminal: \$*" >>"$stdin"
+elif IFS= read -r line
+then
+	echo "input: \$*" >>"$stdin"
+fi
 state="$tmp/claude-installed"
 case "\$*" in
 --version) echo "9.9.9 (Claude Code)" ;;
@@ -66,11 +77,12 @@ EOF
 chmod +x "$tmp/bin/git"
 PATH=$tmp/bin:$PATH
 
-# Run agit-setup; check its exit status against $1 (0 or 1).
+# Run agit-setup, with input on its stdin that claude must not see;
+# check its exit status against $1 (0 or 1).
 run () {
 	want=$1
 	shift
-	if sh "$setup" "$@" >"$tmp/out" 2>&1
+	if echo "not for claude" | sh "$setup" "$@" >"$tmp/out" 2>&1
 	then
 		got=0
 	else
@@ -150,6 +162,28 @@ run 0 remove claude-code
 called "$tmp" "plugin uninstall agit@agit-setup --scope user -y"
 called "$tmp" "plugin marketplace remove agit-setup"
 ok "remove without a record"
+
+echo "== claude does not read the stdin of agit-setup"
+# install.sh runs agit-setup with its stdin from /dev/tty.
+if (: </dev/tty) 2>/dev/null
+then
+	cd "$tmp/project"
+	for args in "add claude-code --yes" status "remove claude-code"
+	do
+		# shellcheck disable=SC2086
+		sh "$setup" $args </dev/tty >"$tmp/out" 2>&1 ||
+		{ cat "$tmp/out"; fail "agit-setup $args failed"; }
+	done
+	cd "$tmp"
+else
+	echo "no terminal; only checked with input on a pipe"
+fi
+if test -s "$stdin"
+then
+	cat "$stdin"
+	fail "claude ran with the stdin of agit-setup"
+fi
+ok "claude runs with its stdin from /dev/null"
 
 echo "== errors"
 run 1 add
