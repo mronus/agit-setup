@@ -1,0 +1,40 @@
+version 1
+commit 4cf31e6caf82e8ef5d4fa77de9547fdd43effd56
+capture observed git/2.56.0.agit.2
+actor human human ident=M. Abdullah Onus <mronus@gmail.com>
+file agents/cursor/hooks.json
++ 1-23 HUMAN human eb5ff73cb198e560a9e8c42e546aa0e514f8aa36
+file bin/agit-hook
++ 10-15 HUMAN human c0ee3365d6b0bc1721219f2f55592d7cd423f0c7
++ 23-24 HUMAN human 8cb992faf155a901eec0c55fa66d51db1396e92a
++ 40-41 HUMAN human 7cfba5cd4c6b5aa8a69bb750b2d001d70e310549
++ 295-311 HUMAN human 559040d18fcd66845c6e04ccd9c0327dbf931217
++ 347 HUMAN human 192be19ce75fa495ddf38ff785fd74b503aa62c7
++ 479-552 HUMAN human 14251f985e9f39991e7e58175503368d0969f1f6
++ 591 HUMAN human 5ee4950bdf7f257e0ba70df13d690a8cf57c07b5
++ 610-611 HUMAN human dc742f399112a96df8ccc85bdec8b3ee7e586051
++ 613-623 HUMAN human 4ac7888fc4bc7cb5c18ab70eea4132c253c19190
++ 630-634 HUMAN human 285144eb31f96341df2ab79e0c0bf0be2026100a
+- 10-14 HUMAN human c8a8299bac54b137d61d1068610360f84a942ebd
+- 494 HUMAN human 94552d055d4b7b07885eea0f1bd2000bd30b1546
+file bin/agit-setup
++ 16 HUMAN human ae843f9b7e96b2cf3657fbb67acc79f3f84af873
++ 32-33 HUMAN human 49d37e8b4769d5a77242396d849c5216f5c8b386
++ 38 HUMAN human 695f6c03bd9ac1c4e4d6e95c73cd8a7d7caa9c64
++ 165 HUMAN human de5c0f9f752d1214d5b75df68dcd1fa64e6292e9
++ 173 HUMAN human 5eecb097f01e13fa6bb3e67b56d938a02471d9bb
++ 569-644 HUMAN human 7ee9351104ded4e178c3567aca6e6bcf6c3242b5
+- 16 HUMAN human bceb18e4bfe234200eacbc4c8e4c4c3f8037688c
+- 32 HUMAN human b62e844d7e80d0f25c7459ca88bc80ff8c19646b
+- 37 HUMAN human be5bccf628fa9b86122a350e801d32cbe66719e7
+file test/fixtures/cursor/after-file-edit.json
++ 1-14 HUMAN human b7950f4b978b7cc1856652cf359cb241976ca816
+file test/fixtures/cursor/after-shell-execution.json
++ 1-14 HUMAN human 9df0432cc546cf90a85e1e9dd9f96409e06df3c5
+file test/fixtures/cursor/before-shell-execution.json
++ 1-13 HUMAN human 03dca22bf91981ea5a9c3684c857607f8b46b0e9
+file test/hook-test.sh
++ 535-633 HUMAN human f69401fd2d0efa1e37cbd3e8b1f5d8bea5abb217
+file test/setup-test.sh
++ 303-377 HUMAN human c68715efa08ed9c19e7fe342e4c3cf073306112a
++ 385-386 HUMAN human 6b5adee579f0b2e69d4b101c9818206f990aecfa
