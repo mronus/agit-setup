@@ -1,0 +1,54 @@
+version 1
+commit 50ac6974c7c0eb83e20f9bd79cc58b1ee88dd313
+capture observed git/2.56.0.agit.2
+actor human human ident=M. Abdullah Onus <mronus@gmail.com>
+file bin/agit-hook
++ 10-15 HUMAN human 2b771fb48b9658336d29bc1ba71828ee90c1c3dc
++ 312-333 HUMAN human c9d64c534d4891862693b695148cb8d6ce2a2642
++ 349 HUMAN human 73114bc28e81b114fb3368c24cc8c638d45d929f
++ 355-359 HUMAN human e1b634f61425740cd9a4663272e8e8fca19412a9
++ 618 HUMAN human 07ada7affbcdb713f06832059cbb79e7603e3a38
+- 10-15 HUMAN human c0ee3365d6b0bc1721219f2f55592d7cd423f0c7
+- 327 HUMAN human e5457329ec08d1fd4b19369d999dcf3f52d3ee5c
+- 591 HUMAN human 5ee4950bdf7f257e0ba70df13d690a8cf57c07b5
+file bin/agit-setup
++ 16 HUMAN human 01f990b8566624698326b38f7dc87e8bbfcafe62
++ 33 HUMAN human 10ae876f87ec4bf6902b2ada0956d27cca5683ea
++ 38 HUMAN human 6957304dfd72a3fe9a9706caa0cd81c0ead587f3
++ 166 HUMAN human 15d5b0f95a5484107f346e7c955ec8920412fe7f
++ 174 HUMAN human acd6ef653114102caf24bc4ab7ea41fecf607000
++ 646-801 HUMAN human 7027b58843ffdc76c43d7c1bdf2e8fca35bac745
++ 852-855 HUMAN human aee3d018447bc3126907881e870603b5cd293c34
+- 16 HUMAN human ae843f9b7e96b2cf3657fbb67acc79f3f84af873
+- 33 HUMAN human 2f5193bf9aaaaced93216f1329540b80218e40f0
+- 38 HUMAN human 695f6c03bd9ac1c4e4d6e95c73cd8a7d7caa9c64
+- 173 HUMAN human 5eecb097f01e13fa6bb3e67b56d938a02471d9bb
+- 695-698 HUMAN human 8f2ff6cca1b61a31d8b10e609960e2e0ce1f951c
+file extensions/gemini/gemini-extension.json
++ 1-5 HUMAN human a01004d0734eac02e1176221f1d5dc1ec532f32a
+file extensions/gemini/hooks/hooks.json
++ 1-76 HUMAN human 1f6ea5d8016e15488ee97bab43f138adb560a1e7
+file test/fixtures/gemini/after-tool-replace.json
++ 1-18 HUMAN human 211fef16052c9d90f3980670ca7abc3707accd7e
+file test/fixtures/gemini/after-tool-run-shell-command.json
++ 1-17 HUMAN human f905831909be73bdc62bd7555999664528f92a3a
+file test/fixtures/gemini/after-tool-write-file.json
++ 1-16 HUMAN human 084eeb4fe04a441222ac279841a81380e476389f
+file test/fixtures/gemini/before-tool-replace.json
++ 1-14 HUMAN human 55ce4d92ef1338762c11eb249e74f078eea9ceb8
+file test/fixtures/gemini/before-tool-run-shell-command.json
++ 1-13 HUMAN human d81f5066535c1c1ccff2467cdb227610ba04fe18
+file test/fixtures/gemini/before-tool-write-file.json
++ 1-12 HUMAN human 3f563f1badb85c37bb5637521aff42e2946775f6
+file test/fixtures/gemini/session-end.json
++ 1-8 HUMAN human 9e98615cedbe1437f5f1c04e9bc6df14d88c3223
+file test/fixtures/gemini/session-start.json
++ 1-8 HUMAN human 5414e43b21b6eb20b9519839b5d4d63f0810a1e0
+file test/hook-test.sh
++ 634-695 HUMAN human a52e7ed58a5c68f4b242fe5620ba6b3c26d5ec8d
+file test/setup-test.sh
++ 100 HUMAN human 8867bc502085e02a994389365e54809efaefafbc
++ 378-468 HUMAN human 96b0f278b3936f4298dfcb5dd513643fb358e70f
++ 492-496 HUMAN human 7aa9ebff3fa102d4692e4786ac7dd0080a46f011
++ 506-511 HUMAN human 3dfb9a6268087075f88f5e1a1c87fa5f655c1773
+- 100 HUMAN human d60cfe167d8f42942a3aee331375d7a5d1629195
