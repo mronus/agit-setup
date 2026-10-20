@@ -532,6 +532,105 @@ ok "codex: nothing outside a repository, malformed input"
 ag=claude
 sid=test-session
 
+echo "== Cursor"
+ag=cursor
+sid=5f0e9d1c-2b7a-4c3e-9a51-6d2f8e4b7c10
+new_repo cursor
+cu=$tmp/cursor
+printf 'one\ntwo\ntwo\nthree\n' >"$cu/twice.txt"
+printf 'kept\n' >"$cu/whole.txt"
+"$GIT" -C "$cu" add .
+"$GIT" -C "$cu" commit -q -m files
+# cursor_edit <file> <edits>: the hook after the edit, made already.
+cursor_edit () {
+	fixture after-file-edit \
+		'.conversation_id = $s | .workspace_roots = [$w] | .file_path = $f | .edits = $e' \
+		--arg s "$sid" --arg w "$cu" --arg f "$1" --argjson e "$2" | run_hook edit
+}
+cursor_shell () {
+	case "$1" in
+	pre-shell)
+		fixture before-shell-execution \
+			'.conversation_id = $s | .workspace_roots = [$w] | .cwd = $c | .command = $x' \
+			--arg s "$sid" --arg w "$cu" --arg c "$2" --arg x "$3" ;;
+	*)
+		fixture after-shell-execution \
+			'.conversation_id = $s | .workspace_roots = [$w] | .command = $x' \
+			--arg s "$sid" --arg w "$cu" --arg x "$3" ;;
+	esac | run_hook "$1"
+}
+# One replacement.
+printf 'one\nTWO by cursor\nthree\n' >"$cu/hello.txt"
+cursor_edit "$cu/hello.txt" '[{"old_string": "two", "new_string": "TWO by cursor"}]'
+# Two replacements in one edit, the second inside the text of the first.
+printf 'one\nTWO by cursor\nthree, 3 by cursor\n' >"$cu/hello.txt"
+cursor_edit "$cu/hello.txt" '[{"old_string": "three", "new_string": "three, 3"},
+	{"old_string": "3", "new_string": "3 by cursor"}]'
+# The editor's agent tells the whole file before and after.
+printf 'one\ntwo\ntwo\nthree by cursor\n' >"$cu/twice.txt"
+cursor_edit "$cu/twice.txt" '[{"old_string": "one\ntwo\ntwo\nthree\n",
+	"new_string": "one\ntwo\ntwo\nthree by cursor\n"}]'
+# A new file, written whole.
+mkdir -p "$cu/sub"
+printf 'new by cursor\n' >"$cu/sub/new.txt"
+cursor_edit "$cu/sub/new.txt" '[{"old_string": "", "new_string": "new by cursor\n"}]'
+journal "$cu"
+test "$(journal "$cu" | grep -c "^edit .* $sid ")" = 4 || fail "cursor: expected 4 edits"
+test "$(journal "$cu" | grep -c "^begin .* $sid .* model=claude-4.5-sonnet tool=cursor$")" = 1 ||
+fail "cursor: expected one begin with the model and tool"
+# Not recorded: a replacement whose new text is twice in the file, one
+# whose new text is not there, one with an empty new text, the whole
+# write of a tracked file, and a file that is not UTF-8.
+printf 'one\ntwo\ntwo\nthree by cursor\nfour\n' >"$cu/twice.txt"
+cursor_edit "$cu/twice.txt" '[{"old_string": "", "new_string": "two"}]'
+cursor_edit "$cu/twice.txt" '[{"old_string": "x", "new_string": "not there"}]'
+cursor_edit "$cu/twice.txt" '[{"old_string": "five\n", "new_string": ""}]'
+printf 'rewritten by cursor\n' >"$cu/whole.txt"
+cursor_edit "$cu/whole.txt" '[{"old_string": "", "new_string": "rewritten by cursor\n"}]'
+printf 'caf\351\n' >"$cu/latin1.txt"
+cursor_edit "$cu/latin1.txt" '[{"old_string": "", "new_string": "x"}]'
+cursor_edit "$cu/hello.txt" '"not an array"'
+test "$(journal "$cu" | grep -c "^edit ")" = 4 || fail "cursor: uncertain edits recorded: $(journal "$cu")"
+for want in "twice.txt: the replacements cannot be undone" "whole.txt: a write of the whole file" \
+	"latin1.txt: not UTF-8 text" "hello.txt: the replacements cannot be undone"
+do
+	grep -qF "$want" "$AGIT_HOME/log/hook.log" || fail "cursor: not logged: $want"
+done
+rm -f "$AGIT_HOME/log/hook.log"
+# A shell command: afterShellExecution has no cwd.
+cursor_shell pre-shell "$cu/sub" "echo made by a command >../shell.txt"
+echo "made by a command" >"$cu/shell.txt"
+cursor_shell post-shell "" "echo made by a command >../shell.txt"
+cursor_shell pre-shell "$cu" "git commit -am x"
+cursor_shell post-shell "" "git commit -am x"
+echo "by a human" >>"$cu/hello.txt"
+"$GIT" -C "$cu" add -A
+"$GIT" -C "$cu" commit -q -m cursor
+"$GIT" -C "$cu" provenance show HEAD
+test "$(marks "$cu" hello.txt)" = "2-3 AI
+4 HUMAN" || fail "cursor hello.txt: $(marks "$cu" hello.txt)"
+test "$(marks "$cu" twice.txt)" = "4 AI
+5 HUMAN" || fail "cursor twice.txt: $(marks "$cu" twice.txt)"
+test "$(marks "$cu" sub/new.txt)" = "1 AI" || fail "cursor new.txt: $(marks "$cu" sub/new.txt)"
+test "$(marks "$cu" whole.txt)" = "1 HUMAN" || fail "cursor whole.txt: $(marks "$cu" whole.txt)"
+test "$(marks "$cu" shell.txt)" = "1 AI" || fail "cursor shell.txt: $(marks "$cu" shell.txt)"
+"$GIT" -C "$cu" provenance show HEAD | grep -q "model=claude-4.5-sonnet tool=cursor session=$sid" ||
+fail "cursor: no actor with the model and tool"
+ok "cursor edits and shell commands"
+mkdir -p "$tmp/cursor-outside"
+printf 'x\n' >"$tmp/cursor-outside/x.txt"
+cursor_edit "$tmp/cursor-outside/x.txt" '[{"old_string": "", "new_string": "x\n"}]'
+fixture after-file-edit '.conversation_id = ""' | run_hook edit
+for ev in edit pre-shell post-shell
+do
+	printf '{"conversation_id": ' | run_hook "$ev"
+done
+test -z "$(journal "$cu")" || fail "cursor stamps: $(journal "$cu")"
+ok "cursor: nothing outside a repository, malformed input"
+rm -f "$AGIT_HOME/log/hook.log"
+ag=claude
+sid=test-session
+
 echo "== session-end"
 hook session-end "$repo"
 test -e "$AGIT_HOME/run/claude/$sid" && fail "session-end left the state file"

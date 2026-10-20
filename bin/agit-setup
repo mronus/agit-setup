@@ -13,7 +13,7 @@ log=$home/log/hook.log
 GIT=${AGIT_GIT:-git}
 plugin=agit@agit-setup
 marketplace=agit-setup
-agents="claude-code codex"
+agents="claude-code codex cursor"
 no_agit="is not agit; this session records nothing"
 
 usage () {
@@ -29,12 +29,13 @@ they wrote them, are recorded in the provenance of your commits.
 
 Without a command, ask which agents to connect and how.
 
-Agents: claude-code (Claude Code), codex (Codex CLI).
+Agents: claude-code (Claude Code), codex (Codex CLI), cursor (Cursor:
+its editor and its agent command).
 
     --scope user         record in all your projects (default)
     --scope project      record in the project in the current directory,
                          for everyone who works on it with the agent
-                         (Claude Code)
+                         (Claude Code, Cursor)
     --scope local        record in the project in the current directory,
                          for you only (Claude Code)
     --no-shell           do not record the edits that the agent makes
@@ -161,6 +162,7 @@ agent_name () {
 	case "$1" in
 	claude-code) echo "Claude Code" ;;
 	codex) echo "Codex" ;;
+	cursor) echo "Cursor" ;;
 	esac
 }
 
@@ -168,6 +170,7 @@ agent_name () {
 agent_scopes () {
 	case "$1" in
 	claude-code) echo "user project local" ;;
+	cursor) echo "user project" ;;
 	*) echo "user" ;;
 	esac
 }
@@ -561,6 +564,82 @@ status_codex () {
 	detect_codex
 	say "Codex:        ${found:-not found}"
 	hooks_status codex "$(codex_home)/hooks.json"
+}
+
+# --- Cursor: ~/.cursor/hooks.json, or .cursor/hooks.json of a project -
+#
+# https://cursor.com/docs/hooks.  Cursor has no hook before a file
+# edit: afterFileEdit tells the edit, and agit-hook records it with git
+# stamp edit.  Its sessionStart hook is left out: Cursor drops the
+# context it returns (a known bug), and Cursor versions that do not
+# know an event reject the whole hooks file, the user's hooks with it.
+# The hooks print nothing, which leaves the decision on a shell command
+# to Cursor and to the other hooks.
+
+cursor_file () {
+	case "$1" in
+	project) echo "$dir/.cursor/hooks.json" ;;
+	*) echo "$HOME/.cursor/hooks.json" ;;
+	esac
+}
+
+# shellcheck disable=SC2317 # called as detect_$(fn agent)
+detect_cursor () {
+	found=
+	for c in cursor cursor-agent agent
+	do
+		if command -v "$c" >/dev/null 2>&1
+		then
+			found=$(command -v "$c")
+			return 0
+		fi
+	done
+	test -d "$HOME/.cursor" && found=$HOME/.cursor
+}
+
+# shellcheck disable=SC2317 # called as add_$(fn agent)
+add_cursor () {
+	new=$(render "$root/agents/cursor/hooks.json") || return 1
+	edit_hooks cursor "$(cursor_file "$scope")" add "$new" || return 1
+	record cursor "$scope:$(cursor_file "$scope")"
+}
+
+# shellcheck disable=SC2317 # called as remove_$(fn agent)
+remove_cursor () {
+	status=0
+	while IFS= read -r entry
+	do
+		edit_hooks cursor "${entry#*:}" remove || status=1
+	done <<EOF
+$(installs cursor "user:$(cursor_file user)")
+EOF
+	"$GIT" config --file "$conf" --unset-all agent.cursor.install 2>/dev/null
+	return $status
+}
+
+# shellcheck disable=SC2317 # called as check_$(fn agent)
+check_cursor () {
+	if has_hooks cursor "$(cursor_file "$scope")" "$(render "$root/agents/cursor/hooks.json")"
+	then
+		say "done: Cursor records the edits of its agent with agit; restart"
+		say "Cursor, and the cursor agent command, if they are running."
+	else
+		warn "$(cursor_file "$scope") does not have the agit hooks"
+		return 1
+	fi
+}
+
+# shellcheck disable=SC2317 # called as status_$(fn agent)
+status_cursor () {
+	detect_cursor
+	say "Cursor:       ${found:-not found}"
+	files=$(installs cursor "user:$(cursor_file user)")
+	while IFS= read -r entry
+	do
+		hooks_status cursor "${entry#*:}"
+	done <<EOF
+$files
+EOF
 }
 
 # --- Commands --------------------------------------------------------

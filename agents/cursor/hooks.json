@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "sh \"@AGIT_HOOK@\" cursor edit",
+        "timeout": 30
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "sh \"@AGIT_HOOK@\" cursor pre-shell",
+        "timeout": 30
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "sh \"@AGIT_HOOK@\" cursor post-shell",
+        "timeout": 30
+      }
+    ]
+  }
+}

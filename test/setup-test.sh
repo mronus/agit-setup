@@ -305,6 +305,81 @@ same "$codex_file" "$tmp/codex-other.json" || fail "codex: a file with hooks in 
 rm -rf "$CODEX_HOME"
 ok "a hooks file that is not JSON"
 
+echo "== add cursor, user and project scopes"
+cat >"$tmp/bin/cursor" <<EOF
+#!/bin/sh
+echo "cursor: \$*" >>"$calls"
+EOF
+chmod +x "$tmp/bin/cursor"
+cursor_file=$HOME/.cursor/hooks.json
+mkdir -p "$HOME/.cursor"
+cat >"$cursor_file" <<'EOF'
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      { "command": "./hooks/block-git.sh" }
+    ],
+    "stop": [
+      { "command": "./hooks/audit.sh" }
+    ]
+  }
+}
+EOF
+cp "$cursor_file" "$tmp/cursor-original.json"
+cd "$tmp/project"
+run 0 add cursor --yes
+run 0 add cursor --scope project --yes
+same "$cursor_file.agit-backup" "$tmp/cursor-original.json" || fail "cursor: no backup"
+want="sh \"$root/bin/agit-hook\" cursor"
+jq -e --arg w "$want" '.version == 1
+	and .hooks.stop == [{command: "./hooks/audit.sh"}]
+	and .hooks.beforeShellExecution == [{command: "./hooks/block-git.sh"},
+		{command: ($w + " pre-shell"), timeout: 30}]
+	and .hooks.afterFileEdit == [{command: ($w + " edit"), timeout: 30}]
+	and .hooks.afterShellExecution == [{command: ($w + " post-shell"), timeout: 30}]' \
+	"$cursor_file" >/dev/null || fail "cursor: unexpected hooks file: $(cat "$cursor_file")"
+jq -e --arg w "$want" '.version == 1 and (.hooks | keys) ==
+	["afterFileEdit", "afterShellExecution", "beforeShellExecution"]' \
+	"$tmp/project/.cursor/hooks.json" >/dev/null ||
+fail "cursor: unexpected project hooks file: $(cat "$tmp/project/.cursor/hooks.json")"
+test "$(git config --file "$conf" --get-all agent.cursor.install)" = "user:$cursor_file
+project:$tmp/project/.cursor/hooks.json" || fail "cursor: installs not recorded"
+grep -q "cursor:" "$calls" && fail "cursor was run: $(cat "$calls")"
+# Cursor runs a hook command with its input in a here-document.
+cmd=$(jq -r '.hooks.afterFileEdit[0].command' "$cursor_file")
+input=$(jq -c '.workspace_roots = [$d] | .file_path = $d + "/x.txt"' --arg d "$tmp" \
+	"$root/test/fixtures/cursor/after-file-edit.json")
+sh -c "$cmd <<'CURSOR_HOOK_EOF'
+$input
+CURSOR_HOOK_EOF" >"$tmp/hook-out" 2>&1 || fail "cursor: the hook command failed"
+test -s "$tmp/hook-out" && fail "cursor: the hook command printed: $(cat "$tmp/hook-out")"
+cp "$cursor_file" "$tmp/cursor-added.json"
+run 0 add cursor --yes
+same "$cursor_file" "$tmp/cursor-added.json" || fail "cursor: a second add changed the file"
+ok "add cursor"
+
+echo "== status and remove cursor"
+run 0 status cursor
+grep -qF "$cursor_file: agit hooks for afterFileEdit, afterShellExecution, beforeShellExecution" "$tmp/out" ||
+fail "status cursor"
+grep -qF "$tmp/project/.cursor/hooks.json: agit hooks for" "$tmp/out" || fail "status cursor, project"
+cd "$tmp"
+run 0 remove cursor
+test "$(jq -S . "$cursor_file")" = "$(jq -S . "$tmp/cursor-original.json")" ||
+fail "cursor: remove did not restore the file: $(cat "$cursor_file")"
+test "$(jq -c . "$tmp/project/.cursor/hooks.json")" = '{"version":1,"hooks":{}}' ||
+fail "cursor: project file after remove: $(cat "$tmp/project/.cursor/hooks.json")"
+ok "remove cursor"
+
+echo "== a Cursor hooks file with comments"
+printf '{\n  // mine\n  "version": 1,\n  "hooks": {}\n}\n' >"$cursor_file"
+run 1 add cursor --yes
+grep -q "is not JSON" "$tmp/out" || fail "cursor: no error for comments"
+git config --file "$conf" --get-all agent.cursor.install && fail "cursor: recorded after an error"
+rm -rf "$HOME/.cursor" "$tmp/project/.cursor"
+ok "a Cursor hooks file with comments"
+
 echo "== errors"
 run 1 add
 run 1 add claude-code --transcripts --yes
@@ -312,6 +387,8 @@ grep -q "unknown option: --transcripts" "$tmp/out" || fail "--transcripts accept
 run 1 add claude-code --scope everywhere --yes
 run 1 add codex --scope project --yes
 grep -q "Codex supports --scope user" "$tmp/out" || fail "no message for codex --scope project"
+run 1 add cursor --scope local --yes
+grep -q "Cursor supports --scope user, project" "$tmp/out" || fail "no message for cursor --scope local"
 run 1 add frobnicator --yes
 run 1 frobnicate
 mkdir -p "$tmp/no-claude"
