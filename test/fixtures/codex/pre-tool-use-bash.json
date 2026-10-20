@@ -1,0 +1,14 @@
+{
+  "session_id": "019a0000-0000-7000-8000-000000000001",
+  "transcript_path": "/home/user/.codex/sessions/2026/10/20/rollout-2026-10-20T10-00-00-019a0000-0000-7000-8000-000000000001.jsonl",
+  "cwd": "/home/user/project",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5.5-codex",
+  "permission_mode": "default",
+  "turn_id": "019a0000-0000-7000-8000-0000000000a1",
+  "tool_name": "Bash",
+  "tool_use_id": "call_exec_1",
+  "tool_input": {
+    "command": "make test"
+  }
+}

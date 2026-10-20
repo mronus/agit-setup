@@ -3,8 +3,9 @@
 #
 # Copyright (c) 2026 M. Abdullah Onus
 #
-# Test the commands of bin/agit-setup that do not ask questions, with a
-# fake claude on PATH that records its arguments:
+# Test the commands of bin/agit-setup that do not ask questions, with
+# fake agents on PATH that record their arguments, and the hooks files
+# of the agents in a temporary HOME:
 #
 #   test/setup-test.sh
 #
@@ -21,6 +22,7 @@ trap 'rm -rf "$tmp"' EXIT
 tmp=$(cd "$tmp" && pwd -P)
 export HOME="$tmp/home"
 export AGIT_HOME="$tmp/agit-home"
+export CODEX_HOME="$tmp/home/.codex"
 mkdir -p "$HOME" "$tmp/bin" "$tmp/project"
 conf=$AGIT_HOME/setup.conf
 calls=$tmp/claude-calls
@@ -33,6 +35,12 @@ fail () {
 
 ok () {
 	echo "ok: $*"
+}
+
+# Succeed if the files $1 and $2 have the same bytes (cmp is not on
+# every system).
+same () {
+	test "$(cksum <"$1")" = "$(cksum <"$2")"
 }
 
 # A claude that records "<directory>: <arguments>" and keeps the
@@ -193,11 +201,118 @@ then
 fi
 ok "claude runs with its stdin from /dev/null"
 
+# The hooks file of an agent, with the user's own hooks.
+codex_file=$CODEX_HOME/hooks.json
+
+echo "== add codex"
+cat >"$tmp/bin/codex" <<EOF
+#!/bin/sh
+echo "codex: \$*" >>"$calls"
+EOF
+chmod +x "$tmp/bin/codex"
+mkdir -p "$CODEX_HOME"
+cat >"$codex_file" <<'EOF'
+{
+  "description": "my hooks",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "~/bin/check-command", "timeout": 5 }]
+      }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "say done" }] }
+    ]
+  }
+}
+EOF
+cp "$codex_file" "$tmp/codex-original.json"
+run 0 add codex --yes
+same "$codex_file.agit-backup" "$tmp/codex-original.json" || fail "codex: no backup"
+jq -e '.description == "my hooks"
+	and .hooks.Stop == [{hooks: [{type: "command", command: "say done"}]}]
+	and .hooks.PreToolUse[0].hooks[0].command == "~/bin/check-command"
+	and (.hooks.PreToolUse | length) == 3
+	and (.hooks.SessionStart | length) == 1' "$codex_file" >/dev/null ||
+fail "codex: unexpected hooks file: $(cat "$codex_file")"
+want="sh \"$root/bin/agit-hook\" codex pre-edit"
+jq -e --arg w "$want" '.hooks.PreToolUse[1] == {matcher: "apply_patch",
+	hooks: [{type: "command", command: $w, timeout: 30}]}' "$codex_file" >/dev/null ||
+fail "codex: no pre-edit hook: $(jq -c .hooks.PreToolUse "$codex_file")"
+test "$(git config --file "$conf" --get-all agent.codex.install)" = "user:$codex_file" ||
+fail "codex: the install was not recorded"
+grep -q "run /hooks" "$tmp/out" || fail "codex: no word about trusting the hooks"
+grep -q "codex:" "$calls" && fail "codex was run: $(cat "$calls")"
+cp "$codex_file" "$tmp/codex-added.json"
+run 0 add codex --yes
+same "$codex_file" "$tmp/codex-added.json" || fail "codex: a second add changed the file"
+grep -q "unchanged" "$tmp/out" || fail "codex: a second add did not say unchanged"
+ok "add codex"
+
+echo "== the hook commands run agit-hook"
+# The command of the pre-edit hook, run by a shell as Codex does, with
+# the input of Codex: it exits 0 and prints nothing.
+cmd=$(jq -r '.hooks.PreToolUse[1].hooks[0].command' "$codex_file")
+jq '.cwd = $c' --arg c "$tmp" "$root/test/fixtures/codex/pre-tool-use-apply-patch.json" |
+sh -c "$cmd" >"$tmp/hook-out" 2>&1 || fail "codex: the hook command failed"
+test -s "$tmp/hook-out" && fail "codex: the hook command printed: $(cat "$tmp/hook-out")"
+ok "the hook commands run agit-hook"
+
+echo "== status codex"
+run 0 status codex
+grep -qF "$codex_file: agit hooks for PostToolUse, PreToolUse, SessionEnd, SessionStart" "$tmp/out" ||
+fail "status codex"
+grep -q "Claude Code:" "$tmp/out" && fail "status codex shows Claude Code"
+ok "status codex"
+
+echo "== remove codex"
+run 0 remove codex
+test "$(jq -S . "$codex_file")" = "$(jq -S . "$tmp/codex-original.json")" ||
+fail "codex: remove did not restore the file: $(cat "$codex_file")"
+git config --file "$conf" --get-all agent.codex.install && fail "codex: still recorded"
+run 0 remove codex
+grep -q "unchanged" "$tmp/out" || fail "codex: a second remove changed the file"
+ok "remove codex"
+
+echo "== hooks file created, and agit-setup under HOME"
+# agit-setup installed in ~/.agit/setup names agit-hook from $HOME.
+mkdir -p "$HOME/.agit/setup"
+cp -R "$root/bin" "$root/agents" "$HOME/.agit/setup/"
+rm -rf "$CODEX_HOME"
+setup=$HOME/.agit/setup/bin/agit-setup
+run 0 add codex --yes
+jq -e '.hooks.PreToolUse[0].hooks[0].command
+	== "sh \"$HOME/.agit/setup/bin/agit-hook\" codex pre-edit"' "$codex_file" >/dev/null ||
+fail "codex: hook path not from HOME: $(cat "$codex_file")"
+test -e "$codex_file.agit-backup" && fail "codex: backup of a file that did not exist"
+run 0 remove codex
+setup=$root/bin/agit-setup
+test "$(jq -c . "$codex_file")" = '{"hooks":{}}' || fail "codex: $(cat "$codex_file")"
+rm -rf "$HOME/.agit"
+ok "hooks file created"
+
+echo "== a hooks file that is not JSON"
+printf '{\n  // my hooks\n  "hooks": {}\n}\n' >"$codex_file"
+cp "$codex_file" "$tmp/codex-comments.json"
+run 1 add codex --yes
+grep -q "is not JSON" "$tmp/out" || fail "codex: no error for a file that is not JSON"
+same "$codex_file" "$tmp/codex-comments.json" || fail "codex: a file that is not JSON was changed"
+echo '{"hooks": {"PreToolUse": {}}}' >"$codex_file"
+run 1 add codex --yes
+echo '{"hooks": {"PreToolUse": {}}}' >"$tmp/codex-other.json"
+same "$codex_file" "$tmp/codex-other.json" || fail "codex: a file with hooks in another form was changed"
+rm -rf "$CODEX_HOME"
+ok "a hooks file that is not JSON"
+
 echo "== errors"
 run 1 add
 run 1 add claude-code --transcripts --yes
 grep -q "unknown option: --transcripts" "$tmp/out" || fail "--transcripts accepted"
 run 1 add claude-code --scope everywhere --yes
+run 1 add codex --scope project --yes
+grep -q "Codex supports --scope user" "$tmp/out" || fail "no message for codex --scope project"
+run 1 add frobnicator --yes
 run 1 frobnicate
 mkdir -p "$tmp/no-claude"
 for t in dirname grep mkdir sed tail cat jq

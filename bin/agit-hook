@@ -6,12 +6,12 @@
 #
 #   agit-hook <agent> <event>   < hook input (JSON)
 #
-# <agent> names the agent whose hook input is read; only "claude"
-# (Claude Code) is known today.  Another agent needs a function
-# input_<agent> that maps its input to the variables sid, cwd, path,
-# cmd, transcript and model, and context_<agent>, summary_<agent> and
-# model_<agent>, which print the session context in its form and read
-# its transcript.
+# <agent> names the agent whose hook input is read: "claude" (Claude
+# Code) or "codex" (Codex CLI).  Each agent has a function
+# input_<agent> that maps its input to the variables tool, sid, cwd,
+# path, cmd, transcript and model, and context_<agent>, which prints
+# the session context in its form; summary_<agent> and model_<agent>,
+# for agents whose transcript format is documented, read it.
 #
 # Events:
 #
@@ -270,6 +270,23 @@ input_claude () {
 	sid=$1 cwd=$2 path=$3 cmd=$4 transcript=$5 model=$6
 }
 
+# Codex: hook input fields to variables
+# (https://developers.openai.com/codex/hooks).  The patch of apply_patch
+# and the command of Bash are both tool_input.command.  The transcript
+# is not a stable interface, says the documentation: it is not read,
+# and Codex has no pre-commit fallback.
+# shellcheck disable=SC2317 # called as input_$agent
+input_codex () {
+	tool=codex
+	vars=$(printf '%s' "$input" | jq -r '
+		def s: if type == "string" then . else "" end;
+		[(.session_id | s), (.cwd | s), (.tool_input.command | s),
+		 (.model | s)]
+		| @sh' 2>/dev/null) || return 1
+	eval "set -- $vars"
+	sid=$1 cwd=$2 path='' cmd=$3 transcript='' model=$4
+}
+
 # The model of the last message of the agent in the transcript lines
 # on stdin.
 # shellcheck disable=SC2317 # called as model_$agent
@@ -283,6 +300,12 @@ model_claude () {
 context_claude () {
 	jq -n --arg c "$1" \
 		'{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}' >&3
+}
+
+# Codex takes the output of Claude Code.
+# shellcheck disable=SC2317 # called as context_$agent
+context_codex () {
+	context_claude "$@"
 }
 
 session_start () {
@@ -330,20 +353,20 @@ commit to this session. Never run \`git stamp begin\`, \`git stamp end\` \
 or \`git stamp edit\` yourself."
 }
 
-# The model of the session: the one session-start remembered, else the
-# last one in the transcript, which is then remembered.  Agents do not
-# all tell it at the start of a session.
+# The model of the session: the one in the hook input, else the one
+# session-start remembered, else the last one in the transcript, which
+# is then remembered.  Agents do not all tell it with each hook.
 session_model () {
-	model=
 	state=$home/run/$agent/$sid
-	if test -f "$state"
+	if test -z "$model" && test -f "$state"
 	then
 		while IFS='=' read -r key value
 		do
 			test "$key" = model && model=$value
 		done <"$state"
 	fi
-	if test -z "$model" && test -n "$transcript" && test -r "$transcript"
+	if test -z "$model" && test -n "$transcript" && test -r "$transcript" &&
+	   command -v "model_$agent" >/dev/null
 	then
 		model=$(tail -n 50 "$transcript" | "model_$agent")
 		if test -n "$model"
@@ -355,6 +378,68 @@ session_model () {
 	case "$model" in
 	*[[:space:]]*) model= ;;
 	esac
+}
+
+# The paths that the edit changes, one per line: the file of the edit
+# tool, or for Codex the files that the patch in $cmd adds, updates,
+# deletes or moves to.  Codex reads each line of its patch with the
+# white space around it trimmed, and resolves relative paths from the
+# directory of the session; the grammar of apply_patch is in
+# codex-rs/apply-patch/src/parser.rs (github.com/openai/codex).
+edit_paths () {
+	case "$agent" in
+	codex)
+		printf '%s\n' "$cmd" | sed -n -E \
+			's/^[[:space:]]*\*\*\* (Add File|Update File|Delete File|Move to): (.*[^[:space:]])[[:space:]]*$/\2/p' ;;
+	*)
+		test -z "$path" || printf '%s\n' "$path" ;;
+	esac
+}
+
+# Stamp $1 (begin or end) for the paths of the edit, with one stamp for
+# all the paths in the same worktree: begin and end stamps for single
+# paths in turn would take the index content of the other paths.
+edit_stamps () {
+	what=$1
+	paths=$(edit_paths)
+	us=$(printf '\037')
+	list=
+	while IFS= read -r p
+	do
+		if test -n "$p" && file_worktree "$p"
+		then
+			list=$list$top$us$rel$nl
+		fi
+	done <<EOF
+$paths
+EOF
+	export GIT_LITERAL_PATHSPECS=1
+	seen=$nl
+	while IFS= read -r line
+	do
+		test -n "$line" || continue
+		top=${line%%"$us"*}
+		case "$seen" in
+		*"$nl$top$nl"*) continue ;;
+		esac
+		seen=$seen$top$nl
+		set --
+		while IFS= read -r other
+		do
+			test "${other%%"$us"*}" = "$top" && set -- "$@" "${other#*"$us"}"
+		done <<EOF
+$list
+EOF
+		if test "$what" = begin
+		then
+			begin -- "$@"
+		elif open_interval
+		then
+			stamp -C "$top" stamp end --session "$sid" -- "$@"
+		fi
+	done <<EOF
+$list
+EOF
 }
 
 begin () {
@@ -387,7 +472,8 @@ pre_commit () {
 	*"${nl}begin "*) ;;
 	*) return 0 ;;
 	esac
-	test -n "$transcript" && test -r "$transcript" || return 0
+	test -n "$transcript" && test -r "$transcript" &&
+	command -v "summary_$agent" >/dev/null || return 0
 	summary=$("summary_$agent" "$transcript")
 	test -n "$summary" || return 0
 	printf '%s\n' "$summary" |
@@ -405,7 +491,7 @@ main () {
 		exit 0
 	fi
 	case "$agent" in
-	claude) ;;
+	claude|codex) ;;
 	*) log "unknown agent"; exit 0 ;;
 	esac
 	input=$(cat)
@@ -421,14 +507,9 @@ main () {
 	session-end)
 		rm -f "$home/run/$agent/$sid" "$home/run/$agent/$sid".* 2>/dev/null ;;
 	pre-edit)
-		test -n "$path" && file_worktree "$path" || exit 0
-		export GIT_LITERAL_PATHSPECS=1
-		begin -- "$rel" ;;
+		edit_stamps begin ;;
 	post-edit)
-		test -n "$path" && file_worktree "$path" || exit 0
-		open_interval || exit 0
-		export GIT_LITERAL_PATHSPECS=1
-		stamp -C "$top" stamp end --session "$sid" -- "$rel" ;;
+		edit_stamps end ;;
 	pre-shell)
 		read_conf
 		test "$opt_shell" = true || exit 0

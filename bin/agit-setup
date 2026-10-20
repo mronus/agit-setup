@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
 # Connect coding agents to agit: install the hooks that record their
-# edits with git stamp, through each agent's own command line tool.
-# Run with --help for the commands.
+# edits with git stamp, through each agent's own command line tool or,
+# for the agents without one, in their hooks file.  Run with --help for
+# the commands.
 
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 home=${AGIT_HOME:-${HOME:?HOME is not set}/.agit}
@@ -12,6 +13,8 @@ log=$home/log/hook.log
 GIT=${AGIT_GIT:-git}
 plugin=agit@agit-setup
 marketplace=agit-setup
+agents="claude-code codex"
+no_agit="is not agit; this session records nothing"
 
 usage () {
 	cat <<EOF
@@ -19,25 +22,26 @@ usage: agit-setup
    or: agit-setup add <agent> [--scope user|project|local] [--no-shell]
                               [--no-reason] [--yes]
    or: agit-setup remove <agent>
-   or: agit-setup status
+   or: agit-setup status [<agent>]
 
 Connect coding agents to agit, so that the lines they write, and why
 they wrote them, are recorded in the provenance of your commits.
 
 Without a command, ask which agents to connect and how.
 
-Agents: claude-code (Claude Code).  Codex, Cursor and Gemini CLI are
-coming.
+Agents: claude-code (Claude Code), codex (Codex CLI).
 
     --scope user         record in all your projects (default)
     --scope project      record in the project in the current directory,
                          for everyone who works on it with the agent
+                         (Claude Code)
     --scope local        record in the project in the current directory,
-                         for you only
+                         for you only (Claude Code)
     --no-shell           do not record the edits that the agent makes
                          through shell commands
     --no-reason          do not record a summary from the transcript
                          before a commit when the agent recorded none
+                         (Claude Code)
     -y, --yes            do not ask for confirmation
 EOF
 }
@@ -77,22 +81,9 @@ ask () {
 	esac
 }
 
+# Succeed if the git $1 (default: git on PATH) is agit.
 agit_ok () {
-	"$GIT" stamp -h 2>&1 | grep -q "usage: git stamp"
-}
-
-check_agit () {
-	where=$(command -v "$GIT" 2>/dev/null) || where=
-	if test -z "$where"
-	then
-		warn "git was not found on PATH; install agit first"
-	elif agit_ok
-	then
-		say "agit: $where ($("$GIT" version))"
-	else
-		warn "$where is not agit; the hooks do nothing until agit is" \
-			"the git on PATH (run . \"$home/env\" or open a new shell)"
-	fi
+	"${1:-$GIT}" stamp -h 2>&1 | grep -q "usage: git stamp"
 }
 
 # Print the git that the hooks run, as bin/agit-hook finds it: $AGIT_GIT,
@@ -117,6 +108,24 @@ hook_git () {
 		echo "$cur/bin/git"
 	else
 		command -v git 2>/dev/null || echo git
+	fi
+}
+
+check_agit () {
+	hg=$(hook_git)
+	if agit_ok "$hg"
+	then
+		say "agit: $hg ($("$hg" version))"
+	else
+		warn "no agit found ($hg is not agit); the hooks do nothing" \
+			"until agit is installed"
+	fi
+	if ! agit_ok
+	then
+		where=$(command -v "$GIT" 2>/dev/null) || where="no git"
+		warn "git on PATH is $where, not agit: commits made from this" \
+			"shell, and by agents started from it, are not recorded" \
+			"(run . \"$home/env\" or open a new shell)"
 	fi
 }
 
@@ -147,6 +156,30 @@ yes_no () {
 	if test "$1" = true; then echo yes; else echo no; fi
 }
 
+# The name of the agent $1 for people.
+agent_name () {
+	case "$1" in
+	claude-code) echo "Claude Code" ;;
+	codex) echo "Codex" ;;
+	esac
+}
+
+# The scopes that the agent $1 supports.
+agent_scopes () {
+	case "$1" in
+	claude-code) echo "user project local" ;;
+	*) echo "user" ;;
+	esac
+}
+
+# The name of the functions of the agent $1: claude-code is claude.
+fn () {
+	case "$1" in
+	claude-code) echo claude ;;
+	*) echo "$1" ;;
+	esac
+}
+
 scope_text () {
 	case "$1" in
 	user) echo "all your projects" ;;
@@ -155,12 +188,22 @@ scope_text () {
 	esac
 }
 
+# The scope chosen for the agent $1.
+scope_of () {
+	eval "echo \"\${scope_$(fn "$1")}\""
+}
+
 summary () {
 	say ""
-	say "  agent:                            Claude Code"
-	say "  where:                            $(scope_text "$scope")"
-	say "  edits made by shell commands:     $(yes_no "$shell")"
-	say "  summary before commits:           $(yes_no "$reason")"
+	for a in $selected
+	do
+		say "  $(agent_name "$a"): $(scope_text "$(scope_of "$a")")"
+	done
+	say "  edits made by shell commands: $(yes_no "$shell")"
+	case " $selected " in
+	*" claude-code "*)
+		say "  summary before commits: $(yes_no "$reason")" ;;
+	esac
 	say ""
 }
 
@@ -172,6 +215,182 @@ write_options () {
 		die "cannot write $conf"
 	done
 }
+
+# Record the installation $2 of the agent $1 in setup.conf.
+record () {
+	"$GIT" config --file "$conf" --fixed-value --unset-all "agent.$1.install" \
+		"$2" 2>/dev/null
+	"$GIT" config --file "$conf" --add "agent.$1.install" "$2" ||
+	warn "cannot record the installation in $conf"
+}
+
+# Print the installations of the agent $1 recorded in setup.conf, else
+# $2.
+installs () {
+	"$GIT" config --file "$conf" --get-all "agent.$1.install" 2>/dev/null ||
+	echo "$2"
+}
+
+# --- Hooks files -----------------------------------------------------
+#
+# Our entries are those whose command runs agit-hook for the agent:
+# sh "<path>/bin/agit-hook" <agent> <event>.  They are added after those
+# of the user, and taken out exactly; the rest of the file is kept,
+# though jq rewrites its layout.  A file that is not JSON is left alone,
+# with an error.
+
+# shellcheck disable=SC2016 # jq variables
+jq_hooks='
+def ours($a): type == "object" and (.command | type) == "string"
+	and (.command | contains("agit-hook\" " + $a + " "));
+def has_ours($a): ours($a)
+	or (type == "object" and (.hooks | type) == "array" and any(.hooks[]; ours($a)));
+def strip($a):
+	if (.hooks | type) == "object" then
+		.hooks |= with_entries(
+			if (.value | type) == "array" and any(.value[]; has_ours($a)) then
+				.value |= map(if ours($a) then empty
+					elif has_ours($a) then
+						(.hooks |= map(select(ours($a) | not)))
+						| select(.hooks != [])
+					else . end)
+				| select(.value != [])
+			else . end)
+	else . end;
+def mine($a):
+	if (.hooks | type) == "object" then
+		.hooks | with_entries(
+			.value |= (if type == "array" then map(select(has_ours($a))) else [] end)
+			| select(.value != []))
+	else {} end;
+'
+
+# The path of agit-hook in the hook commands: from $HOME when it is
+# under it, so that a project file works for everyone who installed
+# agit-setup in the same place.  The agents run hook commands with a
+# shell, which expands $HOME.
+hook_path () {
+	case "$root" in
+	*[\"\\\$\`]*)
+		warn "the path of agit-setup, $root, has a character that" \
+			"cannot be in a hook command: \" \\ \$ or \`"
+		return 1 ;;
+	"$HOME"/*)
+		echo "\$HOME/${root#"$HOME"/}/bin/agit-hook" ;;
+	*)
+		echo "$root/bin/agit-hook" ;;
+	esac
+}
+
+# The hooks of the template $1, with the path of agit-hook in their
+# commands in place of the string $2 (default: @AGIT_HOOK@).
+render () {
+	h=$(hook_path) || return 1
+	jq -c --arg h "$h" --arg p "${2:-@AGIT_HOOK@}" '
+	def cmd: if type == "object" and (.command | type) == "string"
+		then .command |= (split($p) | join($h)) else . end;
+	.hooks |= map_values(map(cmd | if (.hooks | type) == "array"
+		then .hooks |= map(cmd) else . end))' "$1"
+}
+
+# edit_hooks <agent> <file> add <hooks>
+# edit_hooks <agent> <file> remove
+#
+# Add our hooks for the agent, from the rendered template <hooks>, to
+# the hooks file, or remove them.  A second add changes nothing.
+edit_hooks () {
+	a=$1 file=$2 what=$3 new=${4:-null}
+	if test -f "$file"
+	then
+		if ! jq -e --argjson n "$new" '
+			def ok($k): .hooks[$k] == null or (.hooks[$k] | type) == "array";
+			type == "object"
+			and (.hooks == null or (.hooks | type) == "object")
+			and (. as $d | all(($n // {} | .hooks // {}) | keys[]; . as $k | $d | ok($k)))' \
+			"$file" >/dev/null 2>&1
+		then
+			warn "$file is not JSON with hooks in the documented form;" \
+				"fix it, or add the hooks in $root/agents by hand"
+			return 1
+		fi
+		cur=$(cat "$file") || return 1
+	elif test "$what" = remove
+	then
+		say "$file: no hooks file"
+		return 0
+	else
+		cur=null
+	fi
+	# shellcheck disable=SC2016 # jq variables
+	if test "$what" = add
+	then
+		filter='(if $cur == null then {} else $cur end) as $d
+		| if ($d | mine($a)) == $n.hooks then $d
+		  else $d | strip($a)
+			| .hooks = (.hooks // {})
+			| reduce ($n.hooks | to_entries[]) as $e (.;
+				.hooks[$e.key] = ((.hooks[$e.key] // []) + $e.value))
+		  end
+		| if $n.version != null and .version == null
+		  then {version: $n.version} + . else . end'
+	else
+		filter='$cur | strip($a)'
+	fi
+	out=$(printf '%s\n' "$cur" |
+		jq --arg a "$a" --argjson n "$new" "$jq_hooks . as \$cur | $filter") ||
+	return 1
+	if test -f "$file" &&
+	   test "$(jq -S -c . "$file")" = "$(printf '%s\n' "$out" | jq -S -c .)"
+	then
+		say "$file: unchanged"
+		return 0
+	fi
+	if test -f "$file"
+	then
+		if ! test -e "$file.agit-backup"
+		then
+			cp -p "$file" "$file.agit-backup" ||
+			{ warn "cannot back up $file"; return 1; }
+			say "$file: backed up to $file.agit-backup"
+		fi
+	else
+		mkdir -p "$(dirname "$file")" || return 1
+	fi
+	# Written in place, which keeps the mode of the file and a symbolic
+	# link to it.
+	printf '%s\n' "$out" >"$file" || { warn "cannot write $file"; return 1; }
+	if test "$what" = add
+	then
+		say "$file: added the agit hooks"
+	else
+		say "$file: removed the agit hooks"
+	fi
+}
+
+# Succeed if the hooks file $2 has our hooks for the agent $1, as in the
+# rendered template $3.
+has_hooks () {
+	test -f "$2" &&
+	jq -e --arg a "$1" --argjson n "$3" "$jq_hooks"' mine($a) == $n.hooks' \
+		"$2" >/dev/null 2>&1
+}
+
+# Print the events for which the hooks file $2 has our hooks for the
+# agent $1.
+hooks_status () {
+	if ! test -f "$2"
+	then
+		say "  $2: no hooks file"
+		return
+	fi
+	jq -r --arg a "$1" --arg f "$2" "$jq_hooks"'
+		(mine($a) | keys | join(", ")) as $e
+		| if $e == "" then "  \($f): no agit hooks"
+		  else "  \($f): agit hooks for \($e)" end' "$2" 2>/dev/null ||
+	say "  $2: not valid JSON"
+}
+
+# --- Claude Code: the plugin of this repository ----------------------
 
 # Run claude with its stdin from /dev/null.  Under curl | sh, install.sh
 # runs agit-setup with its stdin from /dev/tty, and claude, which
@@ -188,6 +407,20 @@ need_claude () {
 	return 1
 }
 
+# Set $found to where the agent is; fail if it cannot be connected.
+# shellcheck disable=SC2317 # called as detect_$(fn agent)
+detect_claude () {
+	found=
+	if command -v claude >/dev/null 2>&1
+	then
+		found=$(command -v claude)
+		return 0
+	fi
+	test -d "$HOME/.claude" && found="$HOME/.claude, but claude is not on PATH"
+	return 1
+}
+
+# shellcheck disable=SC2317 # called as add_$(fn agent)
 add_claude () {
 	need_claude || return 1
 	say "adding the marketplace $marketplace from $root"
@@ -195,26 +428,18 @@ add_claude () {
 	say "installing $plugin ($scope scope)"
 	(cd "$dir" && run_claude plugin install "$plugin" --scope "$scope" -y) || return 1
 	case "$scope" in
-	user) entry=user ;;
-	*) entry=$scope:$dir ;;
+	user) record claude-code user ;;
+	*) record claude-code "$scope:$dir" ;;
 	esac
-	"$GIT" config --file "$conf" --fixed-value --unset-all agent.claude-code.install \
-		"$entry" 2>/dev/null
-	"$GIT" config --file "$conf" --add agent.claude-code.install "$entry" ||
-	warn "cannot record the installation in $conf"
 }
 
+# shellcheck disable=SC2317 # called as remove_$(fn agent)
 remove_claude () {
 	need_claude || return 1
-	entries=$("$GIT" config --file "$conf" --get-all agent.claude-code.install 2>/dev/null) ||
-	entries=user
+	entries=$(installs claude-code user)
 	status=0
-	old_ifs=$IFS
-	IFS='
-'
-	for entry in $entries
+	while IFS= read -r entry
 	do
-		IFS=$old_ifs
 		case "$entry" in
 		user)
 			say "uninstalling $plugin (user scope)"
@@ -231,32 +456,121 @@ remove_claude () {
 				warn "$d no longer exists; skipping its $s scope"
 			fi ;;
 		esac
-	done
-	IFS=$old_ifs
+	done <<EOF
+$entries
+EOF
 	say "removing the marketplace $marketplace"
 	run_claude plugin marketplace remove "$marketplace" || status=1
 	"$GIT" config --file "$conf" --unset-all agent.claude-code.install 2>/dev/null
 	return $status
 }
 
-# Check that the installation works.
-self_check () {
-	ok=1
-	if ! agit_ok
-	then
-		warn "git on PATH is not agit"
-		ok=
-	fi
-	if ! (cd "$dir" && run_claude plugin list --json 2>/dev/null) |
+# shellcheck disable=SC2317 # called as check_$(fn agent)
+check_claude () {
+	if (cd "$dir" && run_claude plugin list --json 2>/dev/null) |
 		jq -e --arg p "$plugin" 'any(.[]; .id == $p and .enabled)' >/dev/null 2>&1
 	then
-		warn "claude plugin list does not show $plugin as enabled"
-		ok=
-	fi
-	if test -n "$ok"
-	then
 		say "done: Claude Code records its edits with agit from its next session"
+	else
+		warn "claude plugin list does not show $plugin as enabled"
+		return 1
 	fi
+}
+
+# shellcheck disable=SC2317 # called as status_$(fn agent)
+status_claude () {
+	if ! command -v claude >/dev/null 2>&1
+	then
+		say "Claude Code:  not found"
+		return
+	fi
+	say "Claude Code:  $(command -v claude) ($(run_claude --version 2>/dev/null))"
+	if command -v jq >/dev/null 2>&1
+	then
+		run_claude plugin list --json 2>/dev/null |
+		jq -r --arg p "$plugin" '.[] | select(.id == $p) |
+			"  \(.id) \(.version), \(.scope) scope, " +
+			(if .enabled then "enabled" else "disabled" end)'
+	fi
+	"$GIT" config --file "$conf" --get-all agent.claude-code.install 2>/dev/null |
+	sed 's/^/  installed by agit-setup: /'
+}
+
+# --- Codex CLI: $CODEX_HOME/hooks.json -------------------------------
+#
+# https://developers.openai.com/codex/hooks.  Codex installs plugins
+# from a local marketplace too, but it copies them without their
+# symbolic links, and asks again to trust the hooks of a plugin
+# whenever any file of the plugin changes.  The hooks file names the
+# agit-hook of this directory instead: its contents stay the same
+# across upgrades of agit-setup, so the user trusts the hooks once.
+
+codex_home () {
+	echo "${CODEX_HOME:-$HOME/.codex}"
+}
+
+# shellcheck disable=SC2317 # called as detect_$(fn agent)
+detect_codex () {
+	found=
+	if command -v codex >/dev/null 2>&1
+	then
+		found=$(command -v codex)
+	elif test -d "$(codex_home)"
+	then
+		found=$(codex_home)
+	else
+		return 1
+	fi
+}
+
+# shellcheck disable=SC2317 # called as add_$(fn agent)
+add_codex () {
+	new=$(render "$root/agents/codex/hooks.json") || return 1
+	edit_hooks codex "$(codex_home)/hooks.json" add "$new" || return 1
+	record codex "user:$(codex_home)/hooks.json"
+}
+
+# shellcheck disable=SC2317 # called as remove_$(fn agent)
+remove_codex () {
+	status=0
+	while IFS= read -r entry
+	do
+		edit_hooks codex "${entry#*:}" remove || status=1
+	done <<EOF
+$(installs codex "user:$(codex_home)/hooks.json")
+EOF
+	"$GIT" config --file "$conf" --unset-all agent.codex.install 2>/dev/null
+	return $status
+}
+
+# shellcheck disable=SC2317 # called as check_$(fn agent)
+check_codex () {
+	if has_hooks codex "$(codex_home)/hooks.json" "$(render "$root/agents/codex/hooks.json")"
+	then
+		say "done: Codex records its edits with agit once you trust its"
+		say "hooks: start codex, run /hooks, and trust the agit hooks.  Codex"
+		say "asks again only if they change."
+	else
+		warn "$(codex_home)/hooks.json does not have the agit hooks"
+		return 1
+	fi
+}
+
+# shellcheck disable=SC2317 # called as status_$(fn agent)
+status_codex () {
+	detect_codex
+	say "Codex:        ${found:-not found}"
+	hooks_status codex "$(codex_home)/hooks.json"
+}
+
+# --- Commands --------------------------------------------------------
+
+# Die unless $1 names an agent.
+check_agent () {
+	case " $agents " in
+	*" $1 "*) ;;
+	*) die "unknown agent: $1 (agents: $agents)" ;;
+	esac
 }
 
 cmd_add () {
@@ -287,44 +601,64 @@ cmd_add () {
 		esac
 		shift
 	done
-	case "$agent" in
-	claude-code) ;;
-	'') die "name the agent to add: claude-code" ;;
-	codex|cursor|gemini) die "$agent is not supported yet" ;;
-	*) die "unknown agent: $agent" ;;
-	esac
+	test -n "$agent" || die "name the agent to add: $agents"
+	check_agent "$agent"
 	case "$scope" in
 	user|project|local) ;;
 	*) die "--scope must be user, project or local" ;;
 	esac
+	case " $(agent_scopes "$agent") " in
+	*" $scope "*) ;;
+	*) die "$(agent_name "$agent") supports --scope $(agent_scopes "$agent" | sed 's/ /, /g')" ;;
+	esac
 	dir=$(pwd -P)
 	need_jq
-	need_claude || exit 1
+	if test "$agent" = claude-code
+	then
+		need_claude || exit 1
+	fi
 	check_agit
+	selected=$agent
+	eval "scope_$(fn "$agent")=\$scope"
 	summary
 	if test -z "$yes" && have_tty && ! ask "Apply?" y
 	then
 		say "nothing changed"
 		return 0
 	fi
-	apply
+	apply || exit 1
 }
 
+# Connect the agents in $selected, each with its scope.
 apply () {
 	write_options
-	add_claude || die "could not connect Claude Code"
-	self_check
+	failed=
+	for a in $selected
+	do
+		f=$(fn "$a")
+		scope=$(scope_of "$a")
+		if "add_$f"
+		then
+			"check_$f" || failed=1
+		else
+			warn "could not connect $(agent_name "$a")"
+			failed=1
+		fi
+	done
+	test -z "$failed"
 }
 
 cmd_remove () {
 	test $# = 1 || die "usage: agit-setup remove <agent>"
-	case "$1" in
-	claude-code) remove_claude ;;
-	*) die "unknown agent: $1" ;;
-	esac
+	check_agent "$1"
+	dir=$(pwd -P)
+	"remove_$(fn "$1")"
 }
 
 cmd_status () {
+	only=$1
+	test -z "$only" || check_agent "$only"
+	dir=$(pwd -P)
 	where=$(command -v "$GIT" 2>/dev/null) || where=
 	if test -z "$where"
 	then
@@ -347,25 +681,30 @@ cmd_status () {
 	say "hooks run:    $(hook_git)"
 	say "options:      edits made by shell commands: $(yes_no "$(option hook.shell true)")," \
 		"summary before commits: $(yes_no "$(option hook.reason true)")"
-	if command -v claude >/dev/null 2>&1
+	for a in $agents
+	do
+		test -z "$only" || test "$a" = "$only" || continue
+		"status_$(fn "$a")"
+	done
+	# The hooks of Claude Code put agit first on the PATH of its shell
+	# commands; the other agents commit with the git on the PATH they
+	# were started with.
+	if ! agit_ok
 	then
-		say "Claude Code:  $(command -v claude) ($(run_claude --version 2>/dev/null))"
-		if command -v jq >/dev/null 2>&1
-		then
-			run_claude plugin list --json 2>/dev/null |
-			jq -r --arg p "$plugin" '.[] | select(.id == $p) |
-				"  \(.id) \(.version), \(.scope) scope, " +
-				(if .enabled then "enabled" else "disabled" end)'
-		fi
-		"$GIT" config --file "$conf" --get-all agent.claude-code.install 2>/dev/null |
-		sed 's/^/  installed by agit-setup: /'
-	else
-		say "Claude Code:  not found"
+		for a in $agents
+		do
+			test "$a" != claude-code || continue
+			"$GIT" config --file "$conf" --get-all "agent.$a.install" >/dev/null 2>&1 ||
+			continue
+			warn "git on PATH is not agit here: the commits that $(agent_name "$a")" \
+				"makes are recorded only if it starts from a shell with agit" \
+				"on PATH (. \"$home/env\")"
+		done
 	fi
-	if test -s "$log" && grep -q "is not agit; this session records nothing" "$log"
+	if test -s "$log" && grep -q "$no_agit" "$log"
 	then
 		warn "the hooks found no agit in some sessions; the last time:"
-		grep "is not agit; this session records nothing" "$log" | tail -n 1 | sed 's/^/  /' >&2
+		grep "$no_agit" "$log" | tail -n 1 | sed 's/^/  /' >&2
 	fi
 	if test -s "$log"
 	then
@@ -384,34 +723,72 @@ interactive () {
 	check_agit
 	need_jq
 
-	found=
-	if command -v claude >/dev/null 2>&1
-	then
-		found=$(command -v claude)
-		pick=1
-	elif test -d "$HOME/.claude"
-	then
-		found="$HOME/.claude, but claude is not on PATH"
-		pick=
-	else
-		pick=
-	fi
+	# The agents found are selected at first; the others are listed
+	# and cannot be.
+	picks=
+	n=0
+	for a in $agents
+	do
+		n=$((n + 1))
+		if "detect_$(fn "$a")"
+		then
+			eval "ok_$n=1"
+			picks="$picks $a"
+		else
+			eval "ok_$n="
+		fi
+		eval "found_$n=\$found"
+	done
 	while :
 	do
 		say ""
 		say "Coding agents:"
-		if test -n "$pick"; then mark=x; else mark=' '; fi
-		say "  1) [$mark] Claude Code${found:+ ($found)}"
-		say "     [-] Codex, Cursor, Gemini CLI: coming soon"
+		n=0
+		f='' ok=''
+		for a in $agents
+		do
+			n=$((n + 1))
+			eval "f=\$found_$n ok=\$ok_$n"
+			case " $picks " in
+			*" $a "*) mark=x ;;
+			*) mark=' ' ;;
+			esac
+			if test -n "$ok"
+			then
+				say "  $n) [$mark] $(agent_name "$a") ($f)"
+			else
+				say "     [-] $(agent_name "$a"): ${f:-not found}"
+			fi
+		done
 		printf 'Type a number to select or deselect it, Enter to continue: '
 		read -r answer </dev/tty || answer=
-		case "$answer" in
-		'') break ;;
-		1) if test -n "$pick"; then pick=; else pick=1; fi ;;
-		*) say "no agent $answer" ;;
+		test -n "$answer" || break
+		n=0
+		hit=
+		for a in $agents
+		do
+			n=$((n + 1))
+			eval "ok=\$ok_$n"
+			if test "$answer" != "$n" || test -z "$ok"
+			then
+				continue
+			fi
+			hit=1
+			case " $picks " in
+			*" $a "*) picks=$(echo " $picks " | sed "s/ $a / /") ;;
+			*) picks="$picks $a" ;;
+			esac
+		done
+		test -n "$hit" || say "no agent $answer"
+	done
+	selected=
+	for a in $agents
+	do
+		case " $picks " in
+		*" $a "*) selected="$selected $a" ;;
 		esac
 	done
-	if test -z "$pick"
+	if test -z "$selected"
 	then
 		say "no agent selected; nothing changed"
 		return 0
@@ -420,22 +797,38 @@ interactive () {
 	say ""
 	shell=true
 	reason=true
-	ask "Record the edits the agent makes through shell commands?" y || shell=false
-	ask "Record a summary of the session before a commit when the agent records none?" y ||
-	reason=false
-
-	say ""
-	say "Where should Claude Code record its edits?"
-	say "  1) all your projects (default)"
-	say "  2) the project in $dir, for everyone who works on it"
-	say "  3) the project in $dir, for you only"
-	printf 'Choose 1, 2 or 3: '
-	read -r answer </dev/tty || answer=
-	case "$answer" in
-	2) scope=project ;;
-	3) scope=local ;;
-	*) scope=user ;;
+	ask "Record the edits the agents make through shell commands?" y || shell=false
+	case " $selected " in
+	*" claude-code "*)
+		ask "Record a summary of the session before a commit when Claude Code records none?" y ||
+		reason=false ;;
 	esac
+
+	for a in $selected
+	do
+		scopes=$(agent_scopes "$a")
+		s=user
+		if test "$scopes" != user
+		then
+			say ""
+			say "Where should $(agent_name "$a") record its edits?"
+			say "  1) all your projects (default)"
+			say "  2) the project in $dir, for everyone who works on it"
+			case "$scopes" in
+			*local*)
+				say "  3) the project in $dir, for you only"
+				printf 'Choose 1, 2 or 3: ' ;;
+			*)
+				printf 'Choose 1 or 2: ' ;;
+			esac
+			read -r answer </dev/tty || answer=
+			case "$answer:$scopes" in
+			2:*) s=project ;;
+			3:*local*) s=local ;;
+			esac
+		fi
+		eval "scope_$(fn "$a")=\$s"
+	done
 
 	summary
 	if ! ask "Apply?" y
@@ -456,7 +849,9 @@ add)
 remove)
 	shift; cmd_remove "$@" ;;
 status)
-	shift; cmd_status ;;
+	shift
+	test $# -le 1 || die "usage: agit-setup status [<agent>]"
+	cmd_status "$@" ;;
 *)
 	printf '%s\n' "error: unknown command: $1" >&2
 	usage >&2; exit 1 ;;
