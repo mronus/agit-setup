@@ -1,0 +1,12 @@
+{"type":"user","message":{"role":"user","content":"Rename the old helper."},"isSidechain":false,"sessionId":"test-session"}
+{"type":"assistant","message":{"role":"assistant","model":"claude-older-model","content":[{"type":"text","text":"Renamed the old helper."}]},"isSidechain":false,"sessionId":"test-session"}
+{"type":"user","message":{"role":"user","content":"Add a greeting to hello.txt and a list of names."},"isSidechain":false,"sessionId":"test-session"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Not part of the summary."}]},"isSidechain":false,"sessionId":"test-session"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I will add the greeting first."}]},"isSidechain":false,"sessionId":"test-session"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Edit","input":{"file_path":"hello.txt"}}]},"isSidechain":false,"sessionId":"test-session"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"isSidechain":false,"sessionId":"test-session"}
+{"type":"user","message":{"role":"user","content":"<local-command-stdout>not a prompt</local-command-stdout>"},"isSidechain":false,"sessionId":"test-session"}
+{"type":"user","message":{"role":"user","content":"Caveat: injected by the harness."},"isMeta":true,"isSidechain":false,"sessionId":"test-session"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Text of a subagent."}]},"isSidechain":true,"sessionId":"test-session"}
+{"type":"assistant","message":{"role":"assistant","model":"claude-fixture-model","content":[{"type":"text","text":"Added the greeting and the names file."}]},"isSidechain":false,"sessionId":"test-session"}
+{"type":"assistant","message":{"role":"assist
