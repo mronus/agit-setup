@@ -1,0 +1,22 @@
+version 1
+commit 531dc5dcc8e92fd7b51a1b58a134f16962064a2a
+capture observed git/2.56.0.agit.2
+actor human human ident=M. Abdullah Onus <mronus@gmail.com>
+file README.md
++ 85-87 HUMAN human d58d60eaf4b5d32204d5a75098dc5ba5a7ca383c
++ 90-120 HUMAN human b67203fb9199f039fdf9722f482098848e49a47e
++ 127-128 HUMAN human 0e54ea27b0036c0278a1175ea054c27d28b49ac3
++ 134-162 HUMAN human 1a704375b6c71501d779521df2fc811b912821b3
++ 174-179 HUMAN human e455391133d6f1ca29605bab90d08ee529f20cd6
+- 85-87 HUMAN human f097dffca49df2a6e9fa20f7361e461311e1b4e8
+- 90-95 HUMAN human 809fddc198417f06c012baadc86b75fe39659ec5
+- 105-106 HUMAN human 0e54ea27b0036c0278a1175ea054c27d28b49ac3
+- 120-122 HUMAN human 6db2d6f6f45fd2512227c2c4efaa82b812e3cc37
+file install.sh
++ 392-393 HUMAN human 75b61f9cf1241a37af1c4dd4451b4dfd86260194
+- 392 HUMAN human 21818940ebee76f6aded4da01c16c3dc7c7d5bd9
+file test/install-test.sh
++ 109 HUMAN human 32bfc56b11136883fb127172ab9214e2f04d70a5
++ 115-121 HUMAN human 67df45b6af6a00b263abe8cfa6453e3ae6a9d2d3
++ 123-125 HUMAN human d947fc07b6cdeb6f4ec33e2e51f71bace8e89208
+- 109 HUMAN human ca35f9e6adbda413cc0acbd7b765e65e72ff61a9
