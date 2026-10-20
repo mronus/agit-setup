@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
-    - run: shellcheck -s sh install.sh test/install-test.sh
+    - run: shellcheck -s sh install.sh bin/agit-hook bin/agit-setup test/*.sh
 
   install:
     strategy:
@@ -34,6 +34,20 @@ jobs:
       SHELL: ${{ matrix.shell }}
     steps:
     - uses: actions/checkout@v6
+    - name: install jq
+      run: |
+        command -v jq ||
+        if command -v brew
+        then
+          brew install jq
+        else
+          sudo apt-get -q update &&
+          sudo apt-get -q -y install jq
+        fi
+    - name: install agit for the hook tests
+      run: sh install.sh --version "$AGIT_TEST_VERSION" --prefix "$RUNNER_TEMP/agit" --no-modify-path --no-agents
+    - run: PATH="$RUNNER_TEMP/agit/current/bin:$PATH" sh test/hook-test.sh
+    - run: PATH="$RUNNER_TEMP/agit/current/bin:$PATH" sh test/setup-test.sh
     - run: sh test/install-test.sh "$AGIT_TEST_VERSION" "$AGIT_TEST_BAD_VERSION"
 
   install-container:
@@ -46,14 +60,18 @@ jobs:
     env:
       SHELL: /bin/bash
     steps:
-    - name: install curl
+    - name: install curl and jq
       run: |
         if command -v apt-get
         then
           apt-get -q update &&
-          apt-get -q -y install curl ca-certificates
+          apt-get -q -y install curl ca-certificates jq
         else
-          dnf -yq install --allowerasing curl ca-certificates tar gzip
+          dnf -yq install --allowerasing curl ca-certificates tar gzip jq
         fi
     - uses: actions/checkout@v6
+    - name: install agit for the hook tests
+      run: sh install.sh --version "$AGIT_TEST_VERSION" --prefix "$RUNNER_TEMP/agit" --no-modify-path --no-agents
+    - run: PATH="$RUNNER_TEMP/agit/current/bin:$PATH" sh test/hook-test.sh
+    - run: PATH="$RUNNER_TEMP/agit/current/bin:$PATH" sh test/setup-test.sh
     - run: sh test/install-test.sh "$AGIT_TEST_VERSION" "$AGIT_TEST_BAD_VERSION"
