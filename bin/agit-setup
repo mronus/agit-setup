@@ -1,0 +1,436 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Connect coding agents to agit: install the hooks that record their
+# edits with git stamp, through each agent's own command line tool.
+# Run with --help for the commands.
+
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+home=${AGIT_HOME:-${HOME:?HOME is not set}/.agit}
+conf=$home/setup.conf
+log=$home/log/hook.log
+GIT=${AGIT_GIT:-git}
+plugin=agit@agit-setup
+marketplace=agit-setup
+
+usage () {
+	cat <<EOF
+usage: agit-setup
+   or: agit-setup add <agent> [--scope user|project|local] [--no-shell]
+                              [--no-reason] [--transcripts] [--yes]
+   or: agit-setup remove <agent>
+   or: agit-setup status
+
+Connect coding agents to agit, so that the lines they write, and why
+they wrote them, are recorded in the provenance of your commits.
+
+Without a command, ask which agents to connect and how.
+
+Agents: claude-code (Claude Code).  Codex, Cursor and Gemini CLI are
+coming.
+
+    --scope user         record in all your projects (default)
+    --scope project      record in the project in the current directory,
+                         for everyone who works on it with the agent
+    --scope local        record in the project in the current directory,
+                         for you only
+    --no-shell           do not record the edits that the agent makes
+                         through shell commands
+    --no-reason          do not record a summary from the transcript
+                         before a commit when the agent recorded none
+    --transcripts        store the agent's whole session transcript
+                         with the reasoning of each commit
+    -y, --yes            do not ask for confirmation
+EOF
+}
+
+say () {
+	printf '%s\n' "$*"
+}
+
+warn () {
+	printf '%s\n' "warning: $*" >&2
+}
+
+die () {
+	printf '%s\n' "error: $*" >&2
+	exit 1
+}
+
+# Succeed if this process can talk to a terminal.
+have_tty () {
+	(: </dev/tty) 2>/dev/null
+}
+
+# Ask the yes/no question $1 with the default $2 (y or n) on the
+# terminal; succeed for yes.
+ask () {
+	if test "$2" = y
+	then
+		printf '%s [Y/n] ' "$1"
+	else
+		printf '%s [y/N] ' "$1"
+	fi
+	read -r answer </dev/tty || answer=
+	case "$answer" in
+	[Yy]*) return 0 ;;
+	[Nn]*) return 1 ;;
+	*) test "$2" = y ;;
+	esac
+}
+
+agit_ok () {
+	"$GIT" stamp -h 2>&1 | grep -q "usage: git stamp"
+}
+
+check_agit () {
+	where=$(command -v "$GIT" 2>/dev/null) || where=
+	if test -z "$where"
+	then
+		warn "git was not found on PATH; install agit first"
+	elif agit_ok
+	then
+		say "agit: $where ($("$GIT" version))"
+	else
+		warn "$where is not agit; the hooks do nothing until agit is" \
+			"the git on PATH (run . \"$home/env\" or open a new shell)"
+	fi
+}
+
+need_jq () {
+	command -v jq >/dev/null 2>&1 && return 0
+	if command -v brew >/dev/null 2>&1
+	then
+		how="brew install jq"
+	elif command -v apt-get >/dev/null 2>&1
+	then
+		how="sudo apt-get install jq"
+	elif command -v dnf >/dev/null 2>&1
+	then
+		how="sudo dnf install jq"
+	else
+		how="see https://jqlang.org/download/"
+	fi
+	die "the hooks need jq, which was not found; install it ($how) and run agit-setup again"
+}
+
+# Print the value of the option $1 (true or false) with the default $2.
+option () {
+	v=$("$GIT" config --file "$conf" --type=bool "$1" 2>/dev/null) || v=$2
+	echo "$v"
+}
+
+yes_no () {
+	if test "$1" = true; then echo yes; else echo no; fi
+}
+
+scope_text () {
+	case "$1" in
+	user) echo "all your projects" ;;
+	project) echo "the project in $dir, for everyone who works on it" ;;
+	local) echo "the project in $dir, for you only" ;;
+	esac
+}
+
+summary () {
+	say ""
+	say "  agent:                            Claude Code"
+	say "  where:                            $(scope_text "$scope")"
+	say "  edits made by shell commands:     $(yes_no "$shell")"
+	say "  summary before commits:           $(yes_no "$reason")"
+	say "  session transcripts:              $(yes_no "$transcripts")"
+	say ""
+}
+
+write_options () {
+	mkdir -p "$home" || die "cannot create $home"
+	for kv in shell="$shell" reason="$reason" transcript="$transcripts"
+	do
+		"$GIT" config --file "$conf" "hook.${kv%%=*}" "${kv#*=}" ||
+		die "cannot write $conf"
+	done
+}
+
+need_claude () {
+	command -v claude >/dev/null 2>&1 && return 0
+	warn "claude is not on PATH; install Claude Code and run" \
+		"agit-setup add claude-code again"
+	return 1
+}
+
+add_claude () {
+	need_claude || return 1
+	say "adding the marketplace $marketplace from $root"
+	claude plugin marketplace add "$root" || return 1
+	say "installing $plugin ($scope scope)"
+	(cd "$dir" && claude plugin install "$plugin" --scope "$scope" -y) || return 1
+	case "$scope" in
+	user) entry=user ;;
+	*) entry=$scope:$dir ;;
+	esac
+	"$GIT" config --file "$conf" --fixed-value --unset-all agent.claude-code.install \
+		"$entry" 2>/dev/null
+	"$GIT" config --file "$conf" --add agent.claude-code.install "$entry" ||
+	warn "cannot record the installation in $conf"
+}
+
+remove_claude () {
+	need_claude || return 1
+	entries=$("$GIT" config --file "$conf" --get-all agent.claude-code.install 2>/dev/null) ||
+	entries=user
+	status=0
+	old_ifs=$IFS
+	IFS='
+'
+	for entry in $entries
+	do
+		IFS=$old_ifs
+		case "$entry" in
+		user)
+			say "uninstalling $plugin (user scope)"
+			claude plugin uninstall "$plugin" --scope user -y || status=1 ;;
+		project:*|local:*)
+			s=${entry%%:*}
+			d=${entry#*:}
+			if test -d "$d"
+			then
+				say "uninstalling $plugin ($s scope, $d)"
+				(cd "$d" && claude plugin uninstall "$plugin" --scope "$s" -y) ||
+				status=1
+			else
+				warn "$d no longer exists; skipping its $s scope"
+			fi ;;
+		esac
+	done
+	IFS=$old_ifs
+	say "removing the marketplace $marketplace"
+	claude plugin marketplace remove "$marketplace" || status=1
+	"$GIT" config --file "$conf" --unset-all agent.claude-code.install 2>/dev/null
+	return $status
+}
+
+# Check that the installation works.
+self_check () {
+	ok=1
+	if ! agit_ok
+	then
+		warn "git on PATH is not agit"
+		ok=
+	fi
+	if ! (cd "$dir" && claude plugin list --json 2>/dev/null) |
+		jq -e --arg p "$plugin" 'any(.[]; .id == $p and .enabled)' >/dev/null 2>&1
+	then
+		warn "claude plugin list does not show $plugin as enabled"
+		ok=
+	fi
+	if test -n "$ok"
+	then
+		say "done: Claude Code records its edits with agit from its next session"
+	fi
+}
+
+cmd_add () {
+	agent=
+	scope=user
+	shell=true
+	reason=true
+	transcripts=false
+	yes=
+	while test $# -gt 0
+	do
+		case "$1" in
+		--scope)
+			test $# -gt 1 || die "--scope needs a value"
+			scope=$2; shift ;;
+		--scope=*)
+			scope=${1#*=} ;;
+		--no-shell)
+			shell=false ;;
+		--no-reason)
+			reason=false ;;
+		--transcripts)
+			transcripts=true ;;
+		-y|--yes)
+			yes=1 ;;
+		-*)
+			die "unknown option: $1" ;;
+		*)
+			test -z "$agent" || die "one agent at a time"
+			agent=$1 ;;
+		esac
+		shift
+	done
+	case "$agent" in
+	claude-code) ;;
+	'') die "name the agent to add: claude-code" ;;
+	codex|cursor|gemini) die "$agent is not supported yet" ;;
+	*) die "unknown agent: $agent" ;;
+	esac
+	case "$scope" in
+	user|project|local) ;;
+	*) die "--scope must be user, project or local" ;;
+	esac
+	dir=$(pwd -P)
+	need_jq
+	need_claude || exit 1
+	check_agit
+	summary
+	if test -z "$yes" && have_tty && ! ask "Apply?" y
+	then
+		say "nothing changed"
+		return 0
+	fi
+	apply
+}
+
+apply () {
+	write_options
+	add_claude || die "could not connect Claude Code"
+	self_check
+}
+
+cmd_remove () {
+	test $# = 1 || die "usage: agit-setup remove <agent>"
+	case "$1" in
+	claude-code) remove_claude ;;
+	*) die "unknown agent: $1" ;;
+	esac
+}
+
+cmd_status () {
+	where=$(command -v "$GIT" 2>/dev/null) || where=
+	if test -z "$where"
+	then
+		say "agit:         git not found on PATH"
+	elif agit_ok
+	then
+		say "agit:         $where ($("$GIT" version))"
+	else
+		say "agit:         not on PATH; $where is $("$GIT" version)"
+	fi
+	if command -v jq >/dev/null 2>&1
+	then
+		say "jq:           $(command -v jq) ($(jq --version 2>&1))"
+		v=$(jq -r .version "$root/plugins/claude-code/.claude-plugin/plugin.json" 2>/dev/null)
+	else
+		say "jq:           not found; the hooks do nothing without it"
+		v=
+	fi
+	say "agit-setup:   $root${v:+ (plugin $v)}"
+	say "options:      edits made by shell commands: $(yes_no "$(option hook.shell true)")," \
+		"summary before commits: $(yes_no "$(option hook.reason true)")," \
+		"transcripts: $(yes_no "$(option hook.transcript false)")"
+	if command -v claude >/dev/null 2>&1
+	then
+		say "Claude Code:  $(command -v claude) ($(claude --version 2>/dev/null))"
+		if command -v jq >/dev/null 2>&1
+		then
+			claude plugin list --json 2>/dev/null |
+			jq -r --arg p "$plugin" '.[] | select(.id == $p) |
+				"  \(.id) \(.version), \(.scope) scope, " +
+				(if .enabled then "enabled" else "disabled" end)'
+		fi
+		"$GIT" config --file "$conf" --get-all agent.claude-code.install 2>/dev/null |
+		sed 's/^/  installed by agit-setup: /'
+	else
+		say "Claude Code:  not found"
+	fi
+	if test -s "$log"
+	then
+		say "hook log:     $log, last errors:"
+		tail -n 5 "$log" | sed 's/^/  /'
+	else
+		say "hook log:     no errors"
+	fi
+}
+
+interactive () {
+	have_tty || { usage >&2; exit 1; }
+	dir=$(pwd -P)
+	say "agit-setup: connect coding agents to agit"
+	say ""
+	check_agit
+	need_jq
+
+	found=
+	if command -v claude >/dev/null 2>&1
+	then
+		found=$(command -v claude)
+		pick=1
+	elif test -d "$HOME/.claude"
+	then
+		found="$HOME/.claude, but claude is not on PATH"
+		pick=
+	else
+		pick=
+	fi
+	while :
+	do
+		say ""
+		say "Coding agents:"
+		if test -n "$pick"; then mark=x; else mark=' '; fi
+		say "  1) [$mark] Claude Code${found:+ ($found)}"
+		say "     [-] Codex, Cursor, Gemini CLI: coming soon"
+		printf 'Type a number to select or deselect it, Enter to continue: '
+		read -r answer </dev/tty || answer=
+		case "$answer" in
+		'') break ;;
+		1) if test -n "$pick"; then pick=; else pick=1; fi ;;
+		*) say "no agent $answer" ;;
+		esac
+	done
+	if test -z "$pick"
+	then
+		say "no agent selected; nothing changed"
+		return 0
+	fi
+
+	say ""
+	shell=true
+	reason=true
+	transcripts=false
+	ask "Record the edits the agent makes through shell commands?" y || shell=false
+	ask "Record a summary of the session before a commit when the agent records none?" y ||
+	reason=false
+	say "Session transcripts are the whole conversation with the agent: they"
+	say "may hold private matters, they are large, and they are pushed with"
+	say "the reasoning of each commit (refs/provenance/reasoning)."
+	ask "Store the session transcripts with the reasoning?" n && transcripts=true
+
+	say ""
+	say "Where should Claude Code record its edits?"
+	say "  1) all your projects (default)"
+	say "  2) the project in $dir, for everyone who works on it"
+	say "  3) the project in $dir, for you only"
+	printf 'Choose 1, 2 or 3: '
+	read -r answer </dev/tty || answer=
+	case "$answer" in
+	2) scope=project ;;
+	3) scope=local ;;
+	*) scope=user ;;
+	esac
+
+	summary
+	if ! ask "Apply?" y
+	then
+		say "nothing changed"
+		return 0
+	fi
+	apply
+}
+
+case "$1" in
+-h|--help|help)
+	usage ;;
+'')
+	interactive ;;
+add)
+	shift; cmd_add "$@" ;;
+remove)
+	shift; cmd_remove "$@" ;;
+status)
+	shift; cmd_status ;;
+*)
+	printf '%s\n' "error: unknown command: $1" >&2
+	usage >&2; exit 1 ;;
+esac

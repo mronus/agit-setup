@@ -1,0 +1,411 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Record the edits of a coding agent with git stamp, from the agent's
+# hooks:
+#
+#   agit-hook <agent> <event>   < hook input (JSON)
+#
+# <agent> names the agent whose hook input is read; only "claude"
+# (Claude Code) is known today.  Another agent needs a function
+# input_<agent> that maps its input to the variables sid, cwd, path,
+# cmd, transcript and model, and context_<agent>, summary_<agent> and model_<agent>, which print the
+# session context in its form and read its transcript.
+#
+# Events:
+#
+#   session-start  remember the model, print the context for the agent
+#   session-end    forget the session
+#   pre-edit       git stamp begin -- <file>, before the agent writes it
+#   post-edit      git stamp end -- <file>, after it did
+#   pre-shell      git stamp begin, whole tree, before a shell command
+#   post-shell     git stamp end, whole tree, after it
+#   pre-commit     before a shell command that runs git commit, record
+#                  a summary from the transcript if the session has not
+#                  recorded one
+#
+# The script never fails and never blocks the agent: it exits 0, prints
+# nothing but the session context, and logs its errors to
+# $AGIT_HOME/log/hook.log.  It does nothing unless the git it runs
+# (${AGIT_GIT:-git}) is agit, the path is inside a worktree, and
+# provenance.enabled is not false there.
+
+home=${AGIT_HOME:-${HOME:-/nonexistent}/.agit}
+GIT=${AGIT_GIT:-git}
+logdir=$home/log
+log=$logdir/hook.log
+conf=$home/setup.conf
+nl='
+'
+
+agent=$1
+event=$2
+
+# Append a line to the log, keeping it under about 1 MB.
+log () {
+	{
+		mkdir -p "$logdir" || return
+		if test -f "$log" &&
+		   test "$(wc -c <"$log" 2>/dev/null || echo 0)" -gt 1048576
+		then
+			tail -c 262144 "$log" >"$log.$$" && mv -f "$log.$$" "$log"
+		fi
+		printf '%s %s %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+			"$agent" "$event" "$*" >>"$log"
+	} 2>/dev/null
+}
+
+# Run git, logging its error output if it fails.  Exit quietly if the
+# git found is not agit.
+stamp () {
+	if err=$("$GIT" "$@" 2>&1 >/dev/null)
+	then
+		return 0
+	fi
+	case "$err" in
+	*"'stamp' is not a git command"*)
+		exit 0 ;;
+	esac
+	log "git $*: $err"
+	return 1
+}
+
+# Set $top and $prefix for the directory $1, or fail if it is not
+# inside a worktree with provenance enabled.
+worktree () {
+	out=$("$GIT" -C "$1" rev-parse --show-toplevel --show-prefix 2>/dev/null) ||
+	return 1
+	top=${out%%"$nl"*}
+	case "$out" in
+	*"$nl"*) prefix=${out#*"$nl"} ;;
+	*) prefix= ;;
+	esac
+	test -n "$top" || return 1
+	test "$("$GIT" -C "$top" config --type=bool provenance.enabled 2>/dev/null)" != false
+}
+
+# Set $top and $rel for the file $1, which may not exist yet.
+file_worktree () {
+	f=$1
+	case "$f" in
+	/*) ;;
+	*) f=$cwd/$f ;;
+	esac
+	dir=${f%/*}
+	rest=${f##*/}
+	test -n "$rest" || return 1
+	while test -n "$dir" && ! test -d "$dir"
+	do
+		rest=${dir##*/}/$rest
+		dir=${dir%/*}
+	done
+	worktree "${dir:-/}" || return 1
+	rel=$prefix$rest
+}
+
+# Read the options of agit-setup.
+read_conf () {
+	opt_shell=true
+	opt_reason=true
+	opt_transcript=false
+	test -f "$conf" || return 0
+	cfg=$("$GIT" config --file "$conf" --type=bool --get-regexp '^hook\.' 2>/dev/null) ||
+	return 0
+	while read -r key value
+	do
+		case "$key" in
+		hook.shell) opt_shell=$value ;;
+		hook.reason) opt_reason=$value ;;
+		hook.transcript) opt_transcript=$value ;;
+		esac
+	done <<EOF
+$cfg
+EOF
+}
+
+# Succeed if the session has a begin in the journal of $top that no
+# end has closed yet.  An end without it would attribute to the session
+# every change since the last snapshot, or since HEAD once a commit
+# has emptied the journal.
+open_interval () {
+	entries=$("$GIT" -C "$top" stamp list --session "$sid" 2>/dev/null) ||
+	return 1
+	last=
+	while read -r kind _
+	do
+		case "$kind" in
+		begin|end) last=$kind ;;
+		esac
+	done <<EOF
+$entries
+EOF
+	test "$last" = begin
+}
+
+# Succeed if the shell command $cmd runs git commit, possibly after
+# "cd <dir> &&" or with "git -C <dir>".
+runs_commit () {
+	case "$cmd" in
+	*git*) ;;
+	*) return 1 ;;
+	esac
+	printf '%s\n' "$cmd" |
+	grep -Eq '(^|[^[:alnum:]_./-])git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)'
+}
+
+# Succeed if the shell command $cmd runs a git command that moves HEAD
+# or rewrites the working tree.  Whole-tree stamps around it would
+# attribute to the session the changes it checks out.
+moves_head () {
+	case "$cmd" in
+	*git*) ;;
+	*) return 1 ;;
+	esac
+	printf '%s\n' "$cmd" |
+	grep -Eq '(^|[^[:alnum:]_./-])git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+(checkout|switch|reset|restore|stash|pull|merge|rebase|cherry-pick|revert|am|commit|worktree)([[:space:]]|$)'
+}
+
+# The directory that the commit in $cmd runs in: the one named by
+# "git -C <dir>" or by a leading "cd <dir> &&", else $cwd.
+commit_dir () {
+	d=$(printf '%s\n' "$cmd" | sed -n \
+		-e 's/.*git[[:space:]]\{1,\}-C[[:space:]]\{1,\}\([^[:space:];&|]\{1,\}\).*/\1/p' \
+		-e 't' \
+		-e 's/^[[:space:]]*cd[[:space:]]\{1,\}\([^[:space:];&|]\{1,\}\)[[:space:]]*&&.*/\1/p' |
+		head -n 1)
+	d=${d#[\"\']}
+	d=${d%[\"\']}
+	case "$d" in
+	'') echo "$cwd" ;;
+	/*) echo "$d" ;;
+	*) echo "$cwd/$d" ;;
+	esac
+}
+
+# The summary of what the session did since the last prompt of the
+# user, from the transcript $1: the prompt and the text the agent wrote
+# after it.
+# shellcheck disable=SC2317 # called as summary_$agent
+summary_claude () {
+	jq -nRr '
+	def text:
+		if type == "string" then .
+		elif type == "array" then
+			[.[] | select(type == "object" and .type == "text") | .text] | join("\n")
+		else "" end;
+	def prompt:
+		if .type == "user" and (.isMeta | not) and (.isSidechain | not)
+		   and (.isCompactSummary | not)
+		then (.message.content | text) else "" end;
+	reduce (inputs | fromjson? | select(type == "object")) as $e
+		({p: "", a: []};
+		 ($e | prompt) as $t
+		 | if $t != "" and ($t | startswith("<") | not) then {p: $t, a: []}
+		   elif $e.type == "assistant" and ($e.isSidechain | not) then
+			.a += [$e.message.content | text | select(. != "")]
+		   else . end)
+	| (.p | if length > 1000 then .[0:1000] + " [...]" else . end) as $p
+	| (.a | join("\n\n")) as $n
+	| (3900 - ($p | length)) as $room
+	| ($n | if length > $room then "[...] " + .[length - $room:] else . end) as $n
+	| if $p == "" and $n == "" then empty
+	  elif $p == "" then $n
+	  elif $n == "" then "Request: " + $p
+	  else "Request: " + $p + "\n\n" + $n end
+	' <"$1" 2>/dev/null
+}
+
+# Claude Code: hook input fields to variables.
+# shellcheck disable=SC2317 # called as input_$agent
+input_claude () {
+	tool=claude-code
+	vars=$(printf '%s' "$input" | jq -r '
+		def s: if type == "string" then . else "" end;
+		[(.session_id | s), (.cwd | s),
+		 (.tool_input.file_path // .tool_input.notebook_path | s),
+		 (.tool_input.command | s), (.transcript_path | s),
+		 (.model | if type == "object" then .id else . end | s)]
+		| @sh' 2>/dev/null) || return 1
+	eval "set -- $vars"
+	sid=$1 cwd=$2 path=$3 cmd=$4 transcript=$5 model=$6
+}
+
+# The model of the last message of the agent in the transcript lines
+# on stdin.
+# shellcheck disable=SC2317 # called as model_$agent
+model_claude () {
+	jq -Rr 'fromjson? | select(type == "object" and .type == "assistant")
+		| .message.model | strings | select(startswith("<") | not)' 2>/dev/null |
+	tail -n 1
+}
+
+# shellcheck disable=SC2317 # called as context_$agent
+context_claude () {
+	jq -n --arg c "$1" \
+		'{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}' >&3
+}
+
+session_start () {
+	state=$home/run/$agent
+	mkdir -p "$state" 2>/dev/null
+	find "$state" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
+	if test -n "$model"
+	then
+		printf 'model=%s\n' "$model" >"$state/$sid" 2>/dev/null
+	fi
+
+	err=$("$GIT" stamp -h 2>&1)
+	case "$err" in
+	*"usage: git stamp"*) ;;
+	*) exit 0 ;;
+	esac
+
+	# The context names the session itself rather than $AGIT_SESSION:
+	# permission rules such as Bash(git *) do not match a command with
+	# a variable in it.
+	if test -n "$CLAUDE_ENV_FILE"
+	then
+		printf 'export AGIT_SESSION=%s\n' "$sid" >>"$CLAUDE_ENV_FILE"
+	fi
+
+	worktree "$cwd" || exit 0
+	"context_$agent" "This machine's git is agit, a Git that records, for \
+each commit, which lines an AI wrote and why. Your edits to files are \
+recorded automatically by hooks, including those made by shell commands.
+Before each \`git commit\` that contains your changes, record why you \
+made them: run \`git stamp reason --session $sid --summary -\` with a \
+few sentences on stdin saying what changed and why. Do not pass \
+\`--session\` to \`git commit\`: the recorded edits already link the \
+commit to this session. Never run \`git stamp begin\`, \`git stamp end\` \
+or \`git stamp edit\` yourself."
+}
+
+# The model of the session: the one session-start remembered, else the
+# last one in the transcript, which is then remembered.  Agents do not
+# all tell it at the start of a session.
+session_model () {
+	model=
+	state=$home/run/$agent/$sid
+	if test -f "$state"
+	then
+		while IFS='=' read -r key value
+		do
+			test "$key" = model && model=$value
+		done <"$state"
+	fi
+	if test -z "$model" && test -n "$transcript" && test -r "$transcript"
+	then
+		model=$(tail -n 50 "$transcript" | "model_$agent")
+		if test -n "$model"
+		then
+			mkdir -p "${state%/*}" 2>/dev/null
+			printf 'model=%s\n' "$model" >"$state" 2>/dev/null
+		fi
+	fi
+	case "$model" in
+	*[[:space:]]*) model= ;;
+	esac
+}
+
+begin () {
+	session_model
+	if test -n "$model"
+	then
+		stamp -C "$top" stamp begin --session "$sid" --tool "$tool" \
+			--model "$model" "$@"
+	else
+		stamp -C "$top" stamp begin --session "$sid" --tool "$tool" "$@"
+	fi
+}
+
+pre_commit () {
+	runs_commit || return 0
+	read_conf
+	test "$opt_reason" = true || return 0
+	worktree "$(commit_dir)" || return 0
+	entries=$("$GIT" -C "$top" stamp list --session "$sid" 2>&1) || {
+		case "$entries" in
+		*"'stamp' is not a git command"*) ;;
+		*) log "git stamp list: $entries" ;;
+		esac
+		return 0
+	}
+	# Nothing to explain if the session changed nothing here, and an
+	# explanation it gave itself is never replaced.
+	case "$nl$entries" in
+	*"${nl}reason "*) return 0 ;;
+	*"${nl}begin "*) ;;
+	*) return 0 ;;
+	esac
+	test -n "$transcript" && test -r "$transcript" || return 0
+	summary=$("summary_$agent" "$transcript")
+	test -n "$summary" || return 0
+	if test "$opt_transcript" = true
+	then
+		set -- --transcript "$transcript"
+	else
+		set --
+	fi
+	printf '%s\n' "$summary" |
+	stamp -C "$top" stamp reason --session "$sid" --summary - "$@"
+}
+
+main () {
+	if ! command -v jq >/dev/null 2>&1
+	then
+		if ! test -f "$logdir/jq-missing"
+		then
+			log "jq is not installed; agit-hook does nothing without it"
+			: >"$logdir/jq-missing" 2>/dev/null
+		fi
+		exit 0
+	fi
+	case "$agent" in
+	claude) ;;
+	*) log "unknown agent"; exit 0 ;;
+	esac
+	input=$(cat)
+	"input_$agent" || { log "cannot read the hook input"; exit 0; }
+	case "$sid" in
+	''|*[!A-Za-z0-9._:-]*)
+		log "invalid session id: $sid"; exit 0 ;;
+	esac
+
+	case "$event" in
+	session-start)
+		session_start ;;
+	session-end)
+		rm -f "$home/run/$agent/$sid" 2>/dev/null ;;
+	pre-edit)
+		test -n "$path" && file_worktree "$path" || exit 0
+		export GIT_LITERAL_PATHSPECS=1
+		begin -- "$rel" ;;
+	post-edit)
+		test -n "$path" && file_worktree "$path" || exit 0
+		open_interval || exit 0
+		export GIT_LITERAL_PATHSPECS=1
+		stamp -C "$top" stamp end --session "$sid" -- "$rel" ;;
+	pre-shell)
+		read_conf
+		test "$opt_shell" = true || exit 0
+		moves_head && exit 0
+		worktree "$cwd" || exit 0
+		begin ;;
+	post-shell)
+		read_conf
+		test "$opt_shell" = true || exit 0
+		moves_head && exit 0
+		worktree "$cwd" || exit 0
+		open_interval || exit 0
+		stamp -C "$top" stamp end --session "$sid" ;;
+	pre-commit)
+		pre_commit ;;
+	*)
+		log "unknown event" ;;
+	esac
+} >/dev/null
+
+# Whatever a hook prints may reach the agent: only the context of
+# session-start is printed, to descriptor 3.
+main 3>&1
+exit 0
