@@ -7,10 +7,10 @@
 #
 #   test/install-test.sh <version> <version-without-tarballs>
 #
-# installs <version> into ~/.agit, checks that a new login shell of
-# $SHELL runs it as git, installs it again, uninstalls it, and checks
-# that installing <version-without-tarballs> fails with a clear
-# message.  It changes the shell startup files in $HOME, so run it on
+# installs <version> into ~/.agit, with agit-setup at $AGIT_SETUP_REF,
+# checks that a new login shell of $SHELL runs it as git and finds
+# agit-setup, installs it again, uninstalls it, and checks that
+# installing <version-without-tarballs> fails with a clear message.  It changes the shell startup files in $HOME, so run it on
 # a throwaway machine or with HOME pointing at an empty directory.
 
 set -e
@@ -83,14 +83,41 @@ grep "usage: git stamp" "$tmp/stamp.out" || fail "git stamp -h does not work"
 login_shell 'git ls-remote https://github.com/mronus/agit.git HEAD' ||
 fail "git ls-remote over https does not work"
 
+echo "== check agit-setup"
+for f in bin/agit-setup bin/agit-hook plugins/claude-code/bin/agit-hook \
+	plugins/claude-code/hooks/hooks.json .claude-plugin/marketplace.json
+do
+	test -f "$prefix/setup/$f" || fail "$prefix/setup/$f is missing"
+done
+setup=$(login_shell 'command -v agit-setup')
+echo "agit-setup: $setup"
+test "$setup" = "$prefix/setup/bin/agit-setup" ||
+fail "agit-setup in a login shell is $setup, not $prefix/setup/bin/agit-setup"
+login_shell 'agit-setup --help' | grep "usage: agit-setup" ||
+fail "agit-setup --help does not work"
+
 echo "== install again"
-sh "$script" --version "$version"
+sh "$script" --version "$version" --yes >"$tmp/again.out"
+cat "$tmp/again.out"
+grep -q "agit-setup$" "$tmp/again.out" || fail "--yes does not print how to connect agents later"
 test "$(marker_lines)" = "$first" || fail "the second install changed the startup files"
 test "$(login_shell 'git version')" = "git version $version" ||
 fail "the second install broke git"
 
 echo "== uninstall"
-sh "$script" --uninstall
+# As if agit-setup had connected Claude Code; a fake claude records
+# what the uninstall asks of it.
+"$prefix/current/bin/git" config --file "$prefix/setup.conf" \
+	agent.claude-code.install user
+mkdir "$tmp/bin"
+printf '#!/bin/sh\necho "$*" >>"%s"\n' "$tmp/claude-calls" >"$tmp/bin/claude"
+chmod +x "$tmp/bin/claude"
+PATH=$tmp/bin:$PATH sh "$script" --uninstall
+cat "$tmp/claude-calls"
+grep -qxF "plugin uninstall agit@agit-setup --scope user -y" "$tmp/claude-calls" ||
+fail "the uninstall did not remove the Claude Code plugin"
+grep -qxF "plugin marketplace remove agit-setup" "$tmp/claude-calls" ||
+fail "the uninstall did not remove the marketplace"
 test ! -e "$prefix" || fail "$prefix is still there"
 marker_lines
 case "$(marker_lines)" in

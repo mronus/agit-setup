@@ -6,6 +6,8 @@ env:
   AGIT_TEST_VERSION: 2.56.0.agit.2
   # A release without prebuilt tarballs.
   AGIT_TEST_BAD_VERSION: 2.56.0.agit.1
+  # install.sh installs agit-setup from this commit.
+  AGIT_SETUP_REF: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   shellcheck:

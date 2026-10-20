@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
 # Install agit, a distribution of Git with the provenance extension,
-# from the prebuilt tarballs of a release on github.com/mronus/agit.
+# from the prebuilt tarballs of a release on github.com/mronus/agit,
+# and agit-setup, which connects coding agents to it, from
+# github.com/mronus/agit-setup.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mronus/agit-setup/main/install.sh | sh
 #   curl -fsSL .../install.sh | sh -s -- --version 2.56.0.agit.2
@@ -10,13 +12,16 @@
 # Without root and without touching Homebrew or system files, the
 # release is unpacked into $prefix/versions/<version>, $prefix/current
 # is pointed at it, and $prefix/env, which puts its bin directory
-# first on PATH, is sourced from the shell startup files.  Run with
-# --help for the options.
+# first on PATH, is sourced from the shell startup files.  This
+# repository is unpacked into $prefix/setup, whose bin directory env
+# also puts on PATH, and, on a terminal, agit-setup is offered to
+# connect the coding agents.  Run with --help for the options.
 #
 # The body is a function called on the last line, so that a download
 # cut short never runs part of the script.
 
 REPO=https://github.com/mronus/agit
+SETUP_TARBALL=https://codeload.github.com/mronus/agit-setup/tar.gz
 MARKER='# added by agit install.sh'
 
 usage () {
@@ -31,15 +36,20 @@ default git for your user.
     --prefix <dir>       where to install (default: \$AGIT_HOME,
                          else ~/.agit)
     --no-modify-path     do not change the shell startup files
-    --uninstall          remove the prefix and the lines this script
-                         added to the shell startup files
-    -y, --yes            do not prompt (it never does today)
+    --no-agents          do not offer to connect coding agents
+    --uninstall          disconnect the coding agents, and remove the
+                         prefix and the lines this script added to the
+                         shell startup files
+    -y, --yes            do not prompt; coding agents are not connected
     -q, --quiet          print only warnings and errors
     -h, --help           show this help
 
 Supported platforms: darwin-arm64, darwin-x86_64 (macOS 12 or later),
 linux-x86_64, linux-aarch64 (glibc 2.31 or later, with libcurl and
 zlib).
+
+agit-setup is taken from the branch or tag \$AGIT_SETUP_REF of
+github.com/mronus/agit-setup (default: main).
 EOF
 }
 
@@ -197,6 +207,10 @@ point_current () {
 write_env () {
 	if ! cat >"$prefix/env.$$" <<EOF
 # agit
+case ":\$PATH:" in
+	*:"$prefix/setup/bin":*) ;;
+	*) export PATH="$prefix/setup/bin:\$PATH" ;;
+esac
 case "\$PATH" in
 	"$bindir":*) ;;
 	*) export PATH="$bindir:\$PATH" ;;
@@ -299,6 +313,7 @@ modify_path () {
 	then
 		f=$(fish_file)
 		content="$MARKER
+fish_add_path -g -m \"$prefix/setup/bin\"
 fish_add_path -g -m \"$bindir\""
 		if ! test -f "$f" || test "$(cat "$f")" != "$content"
 		then
@@ -310,6 +325,73 @@ fish_add_path -g -m \"$bindir\""
 			fi
 		fi
 	fi
+}
+
+# Install this repository, at $AGIT_SETUP_REF, into $prefix/setup.
+# agit works without it, so a failure is only a warning.
+install_setup () {
+	ref=${AGIT_SETUP_REF:-main}
+	stmp=$(mktemp -d "$prefix/.setup.XXXXXX") || {
+		warn "cannot create a temporary directory in $prefix"
+		return 1
+	}
+	say "downloading agit-setup ($ref)"
+	if ! download "$SETUP_TARBALL/$ref" "$stmp/setup.tar.gz"
+	then
+		warn "cannot download agit-setup from $SETUP_TARBALL/$ref"
+		rm -rf "$stmp"
+		return 1
+	fi
+	if ! { mkdir "$stmp/new" &&
+	       tar -xzf "$stmp/setup.tar.gz" -C "$stmp/new" --strip-components 1 &&
+	       test -f "$stmp/new/bin/agit-setup"; }
+	then
+		warn "cannot unpack agit-setup"
+		rm -rf "$stmp"
+		return 1
+	fi
+	# Swap the directories, so that the old one stays whole until the
+	# new one is in place.
+	if test -d "$prefix/setup"
+	then
+		mv "$prefix/setup" "$stmp/old" || {
+			warn "cannot replace $prefix/setup"
+			rm -rf "$stmp"
+			return 1
+		}
+	fi
+	if ! mv "$stmp/new" "$prefix/setup"
+	then
+		test -d "$stmp/old" && mv "$stmp/old" "$prefix/setup"
+		warn "cannot move agit-setup into $prefix/setup"
+		rm -rf "$stmp"
+		return 1
+	fi
+	rm -rf "$stmp"
+	say "installed agit-setup in $prefix/setup"
+}
+
+# Offer to run agit-setup, on the terminal.
+connect_agents () {
+	setup=$prefix/setup/bin/agit-setup
+	test -f "$setup" || return 0
+	if test -z "$yes" && test -z "$no_agents" && (: </dev/tty) 2>/dev/null
+	then
+		printf 'Connect your coding agents now? [Y/n] '
+		read -r answer </dev/tty || answer=n
+		case "$answer" in
+		[Nn]*) ;;
+		*)
+			PATH="$bindir:$prefix/setup/bin:$PATH" AGIT_HOME=$prefix \
+				sh "$setup" </dev/tty ||
+			warn "agit-setup failed; run it again with: agit-setup"
+			return 0 ;;
+		esac
+	fi
+	say ""
+	say "to connect your coding agents (Claude Code) to agit, run"
+	say "    agit-setup"
+	say "in a new shell"
 }
 
 install_agit () {
@@ -398,6 +480,7 @@ install_agit () {
 	# through current/bin could mix two versions while current is
 	# switched.
 	bindir=$prefix/versions/$version/bin
+	install_setup
 	write_env
 
 	if test -z "$no_modify_path"
@@ -453,9 +536,29 @@ install_agit () {
 	say "editors: VS Code and Cursor take PATH from your login shell;"
 	say "restart them to pick up agit. In JetBrains IDEs set the path to"
 	say "Git to $prefix/current/bin/git"
+
+	connect_agents
+}
+
+# Run agit-setup remove for each agent that agit-setup connected.
+disconnect_agents () {
+	setup=$prefix/setup/bin/agit-setup
+	conf=$prefix/setup.conf
+	test -f "$setup" && test -f "$conf" || return 0
+	git=$prefix/current/bin/git
+	test -x "$git" || git=git
+	agents=$("$git" config --file "$conf" --name-only --get-regexp \
+		'^agent\..*\.install$' 2>/dev/null |
+		sed -e 's/^agent\.//' -e 's/\.install$//' | sort -u)
+	for agent in $agents
+	do
+		AGIT_HOME=$prefix AGIT_GIT=$git sh "$setup" remove "$agent" ||
+		warn "could not disconnect $agent; see agit-setup --help"
+	done
 }
 
 uninstall_agit () {
+	disconnect_agents
 	if ! test -d "$prefix"
 	then
 		say "nothing to remove at $prefix"
@@ -500,6 +603,8 @@ main () {
 	version=${AGIT_VERSION-}
 	prefix=${AGIT_HOME:-${HOME:?HOME is not set}/.agit}
 	no_modify_path=
+	no_agents=
+	yes=
 	uninstall=
 	quiet=
 
@@ -520,8 +625,10 @@ main () {
 			no_modify_path=1 ;;
 		--uninstall)
 			uninstall=1 ;;
+		--no-agents)
+			no_agents=1 ;;
 		-y|--yes)
-			;;
+			yes=1 ;;
 		-q|--quiet)
 			quiet=1 ;;
 		-h|--help)
