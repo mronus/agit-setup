@@ -9,8 +9,9 @@
 # <agent> names the agent whose hook input is read; only "claude"
 # (Claude Code) is known today.  Another agent needs a function
 # input_<agent> that maps its input to the variables sid, cwd, path,
-# cmd, transcript and model, and context_<agent>, summary_<agent> and model_<agent>, which print the
-# session context in its form and read its transcript.
+# cmd, transcript and model, and context_<agent>, summary_<agent> and
+# model_<agent>, which print the session context in its form and read
+# its transcript.
 #
 # Events:
 #
@@ -26,17 +27,44 @@
 #
 # The script never fails and never blocks the agent: it exits 0, prints
 # nothing but the session context, and logs its errors to
-# $AGIT_HOME/log/hook.log.  It does nothing unless the git it runs
-# (${AGIT_GIT:-git}) is agit, the path is inside a worktree, and
-# provenance.enabled is not false there.
+# $AGIT_HOME/log/hook.log.  It does nothing unless the git it runs is
+# agit, the path is inside a worktree, and provenance.enabled is not
+# false there.  That git is $AGIT_GIT if set, else the one installed in
+# $AGIT_HOME (install.sh), else git on PATH: an agent started from a
+# shell without agit on PATH must still record.
 
 home=${AGIT_HOME:-${HOME:-/nonexistent}/.agit}
-GIT=${AGIT_GIT:-git}
 logdir=$home/log
 log=$logdir/hook.log
 conf=$home/setup.conf
 nl='
 '
+
+# The git of the agit installed in $home: $home/current names the
+# version, and the path names the version directory itself, as the
+# PATH that install.sh writes does: on macOS, git finds its libexec
+# directory from the path it was started by, without resolving
+# symbolic links.
+installed_git () {
+	cur=$home/current
+	if test -L "$cur"
+	then
+		v=$(readlink "$cur" 2>/dev/null) || return 1
+		case "$v" in
+		/*) cur=$v ;;
+		*) cur=$home/$v ;;
+		esac
+	fi
+	test -x "$cur/bin/git" && test -f "$cur/libexec/git-core/git-stamp" &&
+	echo "$cur/bin/git"
+}
+
+if test -n "$AGIT_GIT"
+then
+	GIT=$AGIT_GIT
+else
+	GIT=$(installed_git) || GIT=git
+fi
 
 agent=$1
 event=$2
@@ -55,8 +83,22 @@ log () {
 	} 2>/dev/null
 }
 
-# Run git, logging its error output if it fails.  Exit quietly if the
-# git found is not agit.
+# Log, once per session, that the git found is not agit, and exit.
+no_agit () {
+	mark=$home/run/$agent/$sid.no-agit
+	if ! test -f "$mark"
+	then
+		where=$(command -v "$GIT" 2>/dev/null) || where=$GIT
+		log "$where is not agit; this session records nothing" \
+			"(install agit, or set AGIT_HOME or AGIT_GIT)"
+		mkdir -p "${mark%/*}" 2>/dev/null
+		: >"$mark" 2>/dev/null
+	fi
+	exit 0
+}
+
+# Run git, logging its error output if it fails.  Exit if the git found
+# is not agit.
 stamp () {
 	if err=$("$GIT" "$@" 2>&1 >/dev/null)
 	then
@@ -64,7 +106,7 @@ stamp () {
 	fi
 	case "$err" in
 	*"'stamp' is not a git command"*)
-		exit 0 ;;
+		no_agit ;;
 	esac
 	log "git $*: $err"
 	return 1
@@ -107,7 +149,6 @@ file_worktree () {
 read_conf () {
 	opt_shell=true
 	opt_reason=true
-	opt_transcript=false
 	test -f "$conf" || return 0
 	cfg=$("$GIT" config --file "$conf" --type=bool --get-regexp '^hook\.' 2>/dev/null) ||
 	return 0
@@ -116,7 +157,6 @@ read_conf () {
 		case "$key" in
 		hook.shell) opt_shell=$value ;;
 		hook.reason) opt_reason=$value ;;
-		hook.transcript) opt_transcript=$value ;;
 		esac
 	done <<EOF
 $cfg
@@ -257,15 +297,25 @@ session_start () {
 	err=$("$GIT" stamp -h 2>&1)
 	case "$err" in
 	*"usage: git stamp"*) ;;
-	*) exit 0 ;;
+	*) no_agit ;;
 	esac
 
 	# The context names the session itself rather than $AGIT_SESSION:
 	# permission rules such as Bash(git *) do not match a command with
-	# a variable in it.
+	# a variable in it.  Claude Code sources $CLAUDE_ENV_FILE before
+	# each shell command: $home/env puts agit first on PATH there, so
+	# that the commits of the agent are made by agit even when it was
+	# started from a shell without it.
 	if test -n "$CLAUDE_ENV_FILE"
 	then
-		printf 'export AGIT_SESSION=%s\n' "$sid" >>"$CLAUDE_ENV_FILE"
+		{
+			printf 'export AGIT_SESSION=%s\n' "$sid"
+			if test -f "$home/env"
+			then
+				e=$(printf '%s' "$home/env" | sed "s/'/'\\\\''/g")
+				printf "if test -f '%s'; then . '%s'; fi\n" "$e" "$e"
+			fi
+		} >>"$CLAUDE_ENV_FILE"
 	fi
 
 	worktree "$cwd" || exit 0
@@ -340,14 +390,8 @@ pre_commit () {
 	test -n "$transcript" && test -r "$transcript" || return 0
 	summary=$("summary_$agent" "$transcript")
 	test -n "$summary" || return 0
-	if test "$opt_transcript" = true
-	then
-		set -- --transcript "$transcript"
-	else
-		set --
-	fi
 	printf '%s\n' "$summary" |
-	stamp -C "$top" stamp reason --session "$sid" --summary - "$@"
+	stamp -C "$top" stamp reason --session "$sid" --summary -
 }
 
 main () {
@@ -375,7 +419,7 @@ main () {
 	session-start)
 		session_start ;;
 	session-end)
-		rm -f "$home/run/$agent/$sid" 2>/dev/null ;;
+		rm -f "$home/run/$agent/$sid" "$home/run/$agent/$sid".* 2>/dev/null ;;
 	pre-edit)
 		test -n "$path" && file_worktree "$path" || exit 0
 		export GIT_LITERAL_PATHSPECS=1

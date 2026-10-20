@@ -17,7 +17,7 @@ usage () {
 	cat <<EOF
 usage: agit-setup
    or: agit-setup add <agent> [--scope user|project|local] [--no-shell]
-                              [--no-reason] [--transcripts] [--yes]
+                              [--no-reason] [--yes]
    or: agit-setup remove <agent>
    or: agit-setup status
 
@@ -38,8 +38,6 @@ coming.
                          through shell commands
     --no-reason          do not record a summary from the transcript
                          before a commit when the agent recorded none
-    --transcripts        store the agent's whole session transcript
-                         with the reasoning of each commit
     -y, --yes            do not ask for confirmation
 EOF
 }
@@ -97,6 +95,31 @@ check_agit () {
 	fi
 }
 
+# Print the git that the hooks run, as bin/agit-hook finds it: $AGIT_GIT,
+# else the agit installed in $home, else git on PATH.
+hook_git () {
+	if test -n "$AGIT_GIT"
+	then
+		echo "$AGIT_GIT"
+		return
+	fi
+	cur=$home/current
+	if test -L "$cur"
+	then
+		v=$(readlink "$cur" 2>/dev/null) || v=
+		case "$v" in
+		/*) cur=$v ;;
+		*) cur=$home/$v ;;
+		esac
+	fi
+	if test -x "$cur/bin/git" && test -f "$cur/libexec/git-core/git-stamp"
+	then
+		echo "$cur/bin/git"
+	else
+		command -v git 2>/dev/null || echo git
+	fi
+}
+
 need_jq () {
 	command -v jq >/dev/null 2>&1 && return 0
 	if command -v brew >/dev/null 2>&1
@@ -138,13 +161,12 @@ summary () {
 	say "  where:                            $(scope_text "$scope")"
 	say "  edits made by shell commands:     $(yes_no "$shell")"
 	say "  summary before commits:           $(yes_no "$reason")"
-	say "  session transcripts:              $(yes_no "$transcripts")"
 	say ""
 }
 
 write_options () {
 	mkdir -p "$home" || die "cannot create $home"
-	for kv in shell="$shell" reason="$reason" transcript="$transcripts"
+	for kv in shell="$shell" reason="$reason"
 	do
 		"$GIT" config --file "$conf" "hook.${kv%%=*}" "${kv#*=}" ||
 		die "cannot write $conf"
@@ -242,7 +264,6 @@ cmd_add () {
 	scope=user
 	shell=true
 	reason=true
-	transcripts=false
 	yes=
 	while test $# -gt 0
 	do
@@ -256,8 +277,6 @@ cmd_add () {
 			shell=false ;;
 		--no-reason)
 			reason=false ;;
-		--transcripts)
-			transcripts=true ;;
 		-y|--yes)
 			yes=1 ;;
 		-*)
@@ -325,9 +344,9 @@ cmd_status () {
 		v=
 	fi
 	say "agit-setup:   $root${v:+ (plugin $v)}"
+	say "hooks run:    $(hook_git)"
 	say "options:      edits made by shell commands: $(yes_no "$(option hook.shell true)")," \
-		"summary before commits: $(yes_no "$(option hook.reason true)")," \
-		"transcripts: $(yes_no "$(option hook.transcript false)")"
+		"summary before commits: $(yes_no "$(option hook.reason true)")"
 	if command -v claude >/dev/null 2>&1
 	then
 		say "Claude Code:  $(command -v claude) ($(run_claude --version 2>/dev/null))"
@@ -342,6 +361,11 @@ cmd_status () {
 		sed 's/^/  installed by agit-setup: /'
 	else
 		say "Claude Code:  not found"
+	fi
+	if test -s "$log" && grep -q "is not agit; this session records nothing" "$log"
+	then
+		warn "the hooks found no agit in some sessions; the last time:"
+		grep "is not agit; this session records nothing" "$log" | tail -n 1 | sed 's/^/  /' >&2
 	fi
 	if test -s "$log"
 	then
@@ -396,14 +420,9 @@ interactive () {
 	say ""
 	shell=true
 	reason=true
-	transcripts=false
 	ask "Record the edits the agent makes through shell commands?" y || shell=false
 	ask "Record a summary of the session before a commit when the agent records none?" y ||
 	reason=false
-	say "Session transcripts are the whole conversation with the agent: they"
-	say "may hold private matters, they are large, and they are pushed with"
-	say "the reasoning of each commit (refs/provenance/reasoning)."
-	ask "Store the session transcripts with the reasoning?" n && transcripts=true
 
 	say ""
 	say "Where should Claude Code record its edits?"

@@ -135,6 +135,7 @@ echo "== session-start"
 new_repo repo
 export CLAUDE_ENV_FILE="$tmp/env-file"
 : >"$CLAUDE_ENV_FILE"
+echo "# agit" >"$AGIT_HOME/env"
 hook session-start "$repo"
 jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' "$tmp/out" >/dev/null ||
 fail "session-start printed no SessionStart JSON: $(cat "$tmp/out")"
@@ -144,6 +145,9 @@ case "$ctx" in
 *) fail "unexpected context: $ctx" ;;
 esac
 grep -qx "export AGIT_SESSION=$sid" "$CLAUDE_ENV_FILE" || fail "AGIT_SESSION not in CLAUDE_ENV_FILE"
+grep -qxF "if test -f '$AGIT_HOME/env'; then . '$AGIT_HOME/env'; fi" "$CLAUDE_ENV_FILE" ||
+fail "the PATH of agit not in CLAUDE_ENV_FILE: $(cat "$CLAUDE_ENV_FILE")"
+rm "$AGIT_HOME/env"
 grep -qx "model=$model" "$AGIT_HOME/run/claude/$sid" || fail "the model was not remembered"
 unset CLAUDE_ENV_FILE
 mkdir -p "$tmp/plain"
@@ -253,14 +257,15 @@ hook post-edit "$repo" "$repo/hello.txt"
 hook pre-commit "$repo" "git commit -am five"
 journal "$repo" | grep -q "^reason " && fail "reason recorded with hook.reason false"
 "$GIT" config --file "$AGIT_HOME/setup.conf" hook.reason true
+# hook.transcript, an option of earlier versions, is ignored.
 "$GIT" config --file "$AGIT_HOME/setup.conf" hook.transcript true
 hook pre-commit "$repo" "git -C $repo commit -am five"
-blob=$(journal "$repo" | awk '$1 == "reason" { print $5 }')
-{ test -n "$blob" && "$GIT" -C "$repo" cat-file -p "$blob" | grep -q "Not part of the summary"; } ||
-fail "the transcript was not recorded with hook.transcript true"
+journal "$repo" | grep -q "^reason .* $sid " || fail "no reason with git -C"
+test -z "$(journal "$repo" | awk '$1 == "reason" { print $5 }')" ||
+fail "a transcript was recorded: $(journal "$repo")"
 "$GIT" -C "$repo" commit -q -am five
 "$GIT" config --file "$AGIT_HOME/setup.conf" --unset hook.transcript
-ok "hook.reason and hook.transcript"
+ok "hook.reason, and no transcript"
 
 echo "== nothing happens outside a repository"
 mkdir -p "$tmp/outside"
@@ -306,8 +311,35 @@ do
 done
 AGIT_GIT=$GIT
 test -z "$(journal "$tmp/plain-git")" || fail "stamps with a git that is not agit"
-test -e "$AGIT_HOME/log/hook.log" && fail "log written for a git that is not agit"
-ok "git is not agit"
+test "$(grep -c "is not agit; this session records nothing" "$AGIT_HOME/log/hook.log")" = 1 ||
+fail "a git that is not agit not logged once: $(cat "$AGIT_HOME/log/hook.log")"
+rm -f "$AGIT_HOME/log/hook.log"
+ok "git is not agit, logged once"
+
+echo "== agit is found in AGIT_HOME"
+# A git that is not agit first on PATH, and agit installed in
+# $AGIT_HOME as install.sh does it.
+v=$AGIT_HOME/versions/9.9.9.agit.1
+mkdir -p "$v/bin" "$v/libexec/git-core"
+: >"$v/libexec/git-core/git-stamp"
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$GIT" >"$v/bin/git"
+chmod +x "$v/bin/git"
+ln -s versions/9.9.9.agit.1 "$AGIT_HOME/current"
+unset AGIT_GIT
+new_repo found
+old_path=$PATH
+PATH="$tmp/bin:$PATH"
+hook pre-edit "$tmp/found" "$tmp/found/hello.txt"
+echo "by the agent" >>"$tmp/found/hello.txt"
+hook post-edit "$tmp/found" "$tmp/found/hello.txt"
+PATH=$old_path
+test "$(journal "$tmp/found" | grep -c " $sid ")" = 2 ||
+fail "agit in AGIT_HOME not used: $(journal "$tmp/found")"
+test -e "$AGIT_HOME/log/hook.log" && fail "log written: $(cat "$AGIT_HOME/log/hook.log")"
+rm "$AGIT_HOME/current"
+rm -rf "$AGIT_HOME/versions"
+export AGIT_GIT="$GIT"
+ok "agit in AGIT_HOME"
 
 echo "== malformed input"
 for ev in session-start pre-edit post-edit pre-shell post-shell pre-commit session-end

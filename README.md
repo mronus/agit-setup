@@ -111,14 +111,15 @@ Options, asked by `agit-setup` and kept in `~/.agit/setup.conf`:
 ```
 --no-shell        do not stamp around shell commands (default: stamp)
 --no-reason       do not record a summary before commits (default: record)
---transcripts     store the whole session transcript with the reasoning
-                  (default: no; transcripts may hold private matters, are
-                  large, and are pushed with refs/provenance/reasoning)
 ```
 
 The hooks never block the agent: they do nothing outside a Git
-worktree, where `provenance.enabled` is false, or when `git` is not
-agit, and they log their errors to `~/.agit/log/hook.log`.
+worktree, where `provenance.enabled` is false, or when they find no
+agit, and they log their errors to `~/.agit/log/hook.log`. They run
+the agit installed in `~/.agit` even when the agent was started from a
+shell that does not have it on `PATH`, and they put it first on the
+`PATH` of the agent's shell commands, so that its commits are made by
+agit.
 
 Without the installer, with agit and `jq` already on your `PATH`, add
 the plugin from Claude Code itself:
