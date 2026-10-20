@@ -1,0 +1,57 @@
+name: CI
+
+on: [push, pull_request]
+
+env:
+  AGIT_TEST_VERSION: 2.56.0.agit.2
+  # A release without prebuilt tarballs.
+  AGIT_TEST_BAD_VERSION: 2.56.0.agit.1
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - run: shellcheck -s sh install.sh test/install-test.sh
+
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: ubuntu-latest
+          shell: /bin/bash
+        - runner: ubuntu-24.04-arm
+          shell: /bin/bash
+        - runner: macos-15
+          shell: /bin/zsh
+        - runner: macos-15-intel
+          shell: /bin/zsh
+    runs-on: ${{ matrix.runner }}
+    env:
+      SHELL: ${{ matrix.shell }}
+    steps:
+    - uses: actions/checkout@v6
+    - run: sh test/install-test.sh "$AGIT_TEST_VERSION" "$AGIT_TEST_BAD_VERSION"
+
+  install-container:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'fedora:latest']
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    env:
+      SHELL: /bin/bash
+    steps:
+    - name: install curl
+      run: |
+        if command -v apt-get
+        then
+          apt-get -q update &&
+          apt-get -q -y install curl ca-certificates
+        else
+          dnf -yq install --allowerasing curl ca-certificates tar gzip
+        fi
+    - uses: actions/checkout@v6
+    - run: sh test/install-test.sh "$AGIT_TEST_VERSION" "$AGIT_TEST_BAD_VERSION"
