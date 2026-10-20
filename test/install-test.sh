@@ -106,13 +106,23 @@ fail "the second install broke git"
 
 echo "== uninstall"
 # As if agit-setup had connected Claude Code; a fake claude records
-# what the uninstall asks of it.
+# what the uninstall asks of it.  jq is required here.
 "$prefix/current/bin/git" config --file "$prefix/setup.conf" \
 	agent.claude-code.install user
 mkdir "$tmp/bin"
 printf '#!/bin/sh\necho "$*" >>"%s"\n' "$tmp/claude-calls" >"$tmp/bin/claude"
 chmod +x "$tmp/bin/claude"
+# And Codex, whose hooks are in a file.
+mkdir -p "$tmp/codex"
+echo '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}' \
+	>"$tmp/codex/hooks.json"
+CODEX_HOME=$tmp/codex AGIT_HOME=$prefix AGIT_GIT=$prefix/current/bin/git \
+	sh "$prefix/setup/bin/agit-setup" add codex --yes
+grep -q "agit-hook" "$tmp/codex/hooks.json" || fail "agit-setup add codex did not add the hooks"
 PATH=$tmp/bin:$PATH sh "$script" --uninstall
+test "$(jq -c . "$tmp/codex/hooks.json")" = \
+	'{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"true"}]}]}}' ||
+fail "the uninstall did not remove the Codex hooks: $(cat "$tmp/codex/hooks.json")"
 cat "$tmp/claude-calls"
 grep -qxF "plugin uninstall agit@agit-setup --scope user -y" "$tmp/claude-calls" ||
 fail "the uninstall did not remove the Claude Code plugin"

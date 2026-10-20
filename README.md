@@ -82,43 +82,101 @@ those hooks:
 
 ```sh
 agit-setup                          # choose agents and options on the terminal
-agit-setup add claude-code          # or without questions
-agit-setup status                   # what is installed, and the last hook errors
-agit-setup remove claude-code
+agit-setup add <agent>              # or without questions
+agit-setup status [<agent>]         # what is installed, and the last hook errors
+agit-setup remove <agent>
 ```
 
-Claude Code is supported today; Codex, Cursor and Gemini CLI are
-coming. For Claude Code, `agit-setup` installs the `agit` plugin of
-this repository with `claude plugin install`, for all your projects
-(`--scope user`, the default) or for the one in the current directory
-(`--scope project` for everyone working on it, `--scope local` for you
-only). The plugin's hooks run `bin/agit-hook`, which:
+The agents are `claude-code` (Claude Code), `codex` (Codex CLI),
+`cursor` (Cursor: the agent of the editor, and the `cursor agent`
+command) and `gemini` (Gemini CLI). The menu offers those it finds.
+Each is connected for all your projects (`--scope user`, the default)
+or, where the agent has project settings, for the one in the current
+directory (`--scope project`, for everyone working on it with the
+agent; `--scope local`, for you only):
+
+```
+agent         how                                       scopes
+claude-code   the agit plugin of this repository,       user, project, local
+              with claude plugin install
+codex         hooks added to ~/.codex/hooks.json        user
+              ($CODEX_HOME)
+cursor        hooks added to ~/.cursor/hooks.json,      user, project
+              or .cursor/hooks.json in the project
+gemini        the extension in extensions/gemini,       user, project
+              with gemini extensions link; or hooks
+              added to .gemini/settings.json in the
+              project
+```
+
+`agit-setup` adds its hooks to a hooks file after yours, keeps a copy
+of the file as `<file>.agit-backup` before its first change, and
+`remove` takes out exactly its own hooks; it leaves a file that is not
+plain JSON alone. A project's hooks name `agit-hook` from `$HOME`
+(`$HOME/.agit/setup/bin/agit-hook`), so they work for everyone who
+installed agit the same way; others see the hook fail, and their agent
+goes on.
+
+The hooks run `bin/agit-hook`, which:
 
 ```
 before and after each file edit    git stamp begin / end -- <file>
 before and after each shell        git stamp begin / end on the whole tree,
 command                            so files written by commands count as
                                    the agent's
+at the start of a session          tell the agent to record why it made
+                                   its changes, with git stamp reason
 before a git commit                if the agent recorded no reason, record
                                    a summary of its last turn as the
                                    commit's reasoning
-at the start of a session          tell the agent to record why it made
-                                   its changes, with git stamp reason
 ```
+
+What each agent records:
+
+```
+                   edits      shell      model   session    summary before
+                              commands           context    a commit
+Claude Code        yes        yes        yes     yes        yes
+Codex CLI          yes        yes        yes     yes        no
+Cursor             after      yes        yes     no         no
+                   the edit
+Gemini CLI         yes        yes        no      yes        no
+```
+
+- Cursor has no hook before a file edit. After an edit, it tells the
+  text each replacement put in; `agit-hook` undoes them on the file to
+  find its content before, and records the edit with `git stamp edit`.
+  When that is not certain (the new text is not found exactly once, or
+  the agent rewrote a whole file that Git tracks), the edit is not
+  recorded and its lines count as human, and `~/.agit/log/hook.log`
+  says so. Cursor's session-start hook is left out: Cursor drops the
+  context it returns, and versions that do not know it reject the
+  whole hooks file. So Cursor's agent is not asked for its reasons.
+- The summary before a commit comes from the session transcript, whose
+  format only Claude Code documents.
+- Gemini CLI does not tell the hooks its model.
+- Codex runs a hook only once you have trusted it: after
+  `agit-setup add codex`, start `codex`, run `/hooks`, and trust the
+  agit hooks. Codex asks again only if they change; upgrades of
+  agit-setup keep them as they are.
 
 Options, asked by `agit-setup` and kept in `~/.agit/setup.conf`:
 
 ```
 --no-shell        do not stamp around shell commands (default: stamp)
 --no-reason       do not record a summary before commits (default: record)
---transcripts     store the whole session transcript with the reasoning
-                  (default: no; transcripts may hold private matters, are
-                  large, and are pushed with refs/provenance/reasoning)
 ```
 
 The hooks never block the agent: they do nothing outside a Git
-worktree, where `provenance.enabled` is false, or when `git` is not
-agit, and they log their errors to `~/.agit/log/hook.log`.
+worktree, where `provenance.enabled` is false, or when they find no
+agit, and they log their errors to `~/.agit/log/hook.log`. They run
+the agit installed in `~/.agit` even when the agent was started from a
+shell that does not have it on `PATH`. The commits that an agent makes
+must be made by agit too: Claude Code's hooks put agit first on the
+`PATH` of its shell commands; Codex, Cursor and Gemini CLI use the
+`PATH` they were started with, which a new shell, or VS Code and
+Cursor restarted, takes from `~/.agit/env`. `agit-setup status` warns
+when the `git` on `PATH` is not agit.
 
 Without the installer, with agit and `jq` already on your `PATH`, add
 the plugin from Claude Code itself:

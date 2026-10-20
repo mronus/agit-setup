@@ -6,11 +6,13 @@
 #
 #   agit-hook <agent> <event>   < hook input (JSON)
 #
-# <agent> names the agent whose hook input is read; only "claude"
-# (Claude Code) is known today.  Another agent needs a function
-# input_<agent> that maps its input to the variables sid, cwd, path,
-# cmd, transcript and model, and context_<agent>, summary_<agent> and model_<agent>, which print the
-# session context in its form and read its transcript.
+# <agent> names the agent whose hook input is read: "claude" (Claude
+# Code), "codex" (Codex CLI), "cursor" (Cursor) or "gemini" (Gemini
+# CLI).  Each agent has a function input_<agent> that maps its input to
+# the variables tool, sid, cwd, path, cmd, transcript and model, and,
+# for the agents that take a session context, context_<agent>, which
+# prints it in their form; summary_<agent> and model_<agent>, for
+# agents whose transcript format is documented, read it.
 #
 # Events:
 #
@@ -18,6 +20,8 @@
 #   session-end    forget the session
 #   pre-edit       git stamp begin -- <file>, before the agent writes it
 #   post-edit      git stamp end -- <file>, after it did
+#   edit           git stamp edit, for an agent that tells an edit only
+#                  after it made it (Cursor)
 #   pre-shell      git stamp begin, whole tree, before a shell command
 #   post-shell     git stamp end, whole tree, after it
 #   pre-commit     before a shell command that runs git commit, record
@@ -26,17 +30,46 @@
 #
 # The script never fails and never blocks the agent: it exits 0, prints
 # nothing but the session context, and logs its errors to
-# $AGIT_HOME/log/hook.log.  It does nothing unless the git it runs
-# (${AGIT_GIT:-git}) is agit, the path is inside a worktree, and
-# provenance.enabled is not false there.
+# $AGIT_HOME/log/hook.log.  It does nothing unless the git it runs is
+# agit, the path is inside a worktree, and provenance.enabled is not
+# false there.  That git is $AGIT_GIT if set, else the one installed in
+# $AGIT_HOME (install.sh), else git on PATH: an agent started from a
+# shell without agit on PATH must still record.
 
 home=${AGIT_HOME:-${HOME:-/nonexistent}/.agit}
-GIT=${AGIT_GIT:-git}
+remember_cwd=
+workspace=
 logdir=$home/log
 log=$logdir/hook.log
 conf=$home/setup.conf
 nl='
 '
+
+# The git of the agit installed in $home: $home/current names the
+# version, and the path names the version directory itself, as the
+# PATH that install.sh writes does: on macOS, git finds its libexec
+# directory from the path it was started by, without resolving
+# symbolic links.
+installed_git () {
+	cur=$home/current
+	if test -L "$cur"
+	then
+		v=$(readlink "$cur" 2>/dev/null) || return 1
+		case "$v" in
+		/*) cur=$v ;;
+		*) cur=$home/$v ;;
+		esac
+	fi
+	test -x "$cur/bin/git" && test -f "$cur/libexec/git-core/git-stamp" &&
+	echo "$cur/bin/git"
+}
+
+if test -n "$AGIT_GIT"
+then
+	GIT=$AGIT_GIT
+else
+	GIT=$(installed_git) || GIT=git
+fi
 
 agent=$1
 event=$2
@@ -55,8 +88,22 @@ log () {
 	} 2>/dev/null
 }
 
-# Run git, logging its error output if it fails.  Exit quietly if the
-# git found is not agit.
+# Log, once per session, that the git found is not agit, and exit.
+no_agit () {
+	mark=$home/run/$agent/$sid.no-agit
+	if ! test -f "$mark"
+	then
+		where=$(command -v "$GIT" 2>/dev/null) || where=$GIT
+		log "$where is not agit; this session records nothing" \
+			"(install agit, or set AGIT_HOME or AGIT_GIT)"
+		mkdir -p "${mark%/*}" 2>/dev/null
+		: >"$mark" 2>/dev/null
+	fi
+	exit 0
+}
+
+# Run git, logging its error output if it fails.  Exit if the git found
+# is not agit.
 stamp () {
 	if err=$("$GIT" "$@" 2>&1 >/dev/null)
 	then
@@ -64,7 +111,7 @@ stamp () {
 	fi
 	case "$err" in
 	*"'stamp' is not a git command"*)
-		exit 0 ;;
+		no_agit ;;
 	esac
 	log "git $*: $err"
 	return 1
@@ -107,7 +154,6 @@ file_worktree () {
 read_conf () {
 	opt_shell=true
 	opt_reason=true
-	opt_transcript=false
 	test -f "$conf" || return 0
 	cfg=$("$GIT" config --file "$conf" --type=bool --get-regexp '^hook\.' 2>/dev/null) ||
 	return 0
@@ -116,7 +162,6 @@ read_conf () {
 		case "$key" in
 		hook.shell) opt_shell=$value ;;
 		hook.reason) opt_reason=$value ;;
-		hook.transcript) opt_transcript=$value ;;
 		esac
 	done <<EOF
 $cfg
@@ -230,6 +275,62 @@ input_claude () {
 	sid=$1 cwd=$2 path=$3 cmd=$4 transcript=$5 model=$6
 }
 
+# Codex: hook input fields to variables
+# (https://developers.openai.com/codex/hooks).  The patch of apply_patch
+# and the command of Bash are both tool_input.command.  The transcript
+# is not a stable interface, says the documentation: it is not read,
+# and Codex has no pre-commit fallback.
+# shellcheck disable=SC2317 # called as input_$agent
+input_codex () {
+	tool=codex
+	vars=$(printf '%s' "$input" | jq -r '
+		def s: if type == "string" then . else "" end;
+		[(.session_id | s), (.cwd | s), (.tool_input.command | s),
+		 (.model | s)]
+		| @sh' 2>/dev/null) || return 1
+	eval "set -- $vars"
+	sid=$1 cwd=$2 path='' cmd=$3 transcript='' model=$4
+}
+
+# Cursor: hook input fields to variables (https://cursor.com/docs/hooks).
+# The session is the conversation; afterShellExecution has no cwd, so
+# pre-shell remembers it.  Cursor does not document its transcript.
+# shellcheck disable=SC2317 # called as input_$agent
+input_cursor () {
+	tool=cursor
+	vars=$(printf '%s' "$input" | jq -r '
+		def s: if type == "string" then . else "" end;
+		[(.conversation_id // .session_id | s), (.cwd | s),
+		 (.workspace_roots | if type == "array" then .[0] else "" end | s),
+		 (.file_path | s), (.command | s), (.model | s)]
+		| @sh' 2>/dev/null) || return 1
+	eval "set -- $vars"
+	sid=$1 cwd=$2 workspace=$3 path=$4 cmd=$5 transcript='' model=$6
+	remember_cwd=1
+}
+
+# Gemini CLI: hook input fields to variables
+# (https://geminicli.com/docs/hooks/reference/).  write_file and replace
+# name their file in tool_input.file_path; run_shell_command runs in
+# tool_input.dir_path, relative to the directory of the session, if
+# given.  The hook input has no model, and the transcript format is not
+# documented.
+# shellcheck disable=SC2317 # called as input_$agent
+input_gemini () {
+	tool=gemini-cli
+	vars=$(printf '%s' "$input" | jq -r '
+		def s: if type == "string" then . else "" end;
+		(.cwd | s) as $cwd
+		| (.tool_input.dir_path | s) as $d
+		| [(.session_id | s),
+		   (if $d == "" then $cwd elif ($d | startswith("/")) then $d
+		    else $cwd + "/" + $d end),
+		   (.tool_input.file_path | s), (.tool_input.command | s)]
+		| @sh' 2>/dev/null) || return 1
+	eval "set -- $vars"
+	sid=$1 cwd=$2 path=$3 cmd=$4 transcript='' model=''
+}
+
 # The model of the last message of the agent in the transcript lines
 # on stdin.
 # shellcheck disable=SC2317 # called as model_$agent
@@ -245,6 +346,17 @@ context_claude () {
 		'{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}' >&3
 }
 
+# Codex and Gemini CLI take the output of Claude Code.
+# shellcheck disable=SC2317 # called as context_$agent
+context_codex () {
+	context_claude "$@"
+}
+
+# shellcheck disable=SC2317 # called as context_$agent
+context_gemini () {
+	context_claude "$@"
+}
+
 session_start () {
 	state=$home/run/$agent
 	mkdir -p "$state" 2>/dev/null
@@ -257,15 +369,26 @@ session_start () {
 	err=$("$GIT" stamp -h 2>&1)
 	case "$err" in
 	*"usage: git stamp"*) ;;
-	*) exit 0 ;;
+	*) no_agit ;;
 	esac
+	command -v "context_$agent" >/dev/null || exit 0
 
 	# The context names the session itself rather than $AGIT_SESSION:
 	# permission rules such as Bash(git *) do not match a command with
-	# a variable in it.
+	# a variable in it.  Claude Code sources $CLAUDE_ENV_FILE before
+	# each shell command: $home/env puts agit first on PATH there, so
+	# that the commits of the agent are made by agit even when it was
+	# started from a shell without it.
 	if test -n "$CLAUDE_ENV_FILE"
 	then
-		printf 'export AGIT_SESSION=%s\n' "$sid" >>"$CLAUDE_ENV_FILE"
+		{
+			printf 'export AGIT_SESSION=%s\n' "$sid"
+			if test -f "$home/env"
+			then
+				e=$(printf '%s' "$home/env" | sed "s/'/'\\\\''/g")
+				printf "if test -f '%s'; then . '%s'; fi\n" "$e" "$e"
+			fi
+		} >>"$CLAUDE_ENV_FILE"
 	fi
 
 	worktree "$cwd" || exit 0
@@ -280,20 +403,20 @@ commit to this session. Never run \`git stamp begin\`, \`git stamp end\` \
 or \`git stamp edit\` yourself."
 }
 
-# The model of the session: the one session-start remembered, else the
-# last one in the transcript, which is then remembered.  Agents do not
-# all tell it at the start of a session.
+# The model of the session: the one in the hook input, else the one
+# session-start remembered, else the last one in the transcript, which
+# is then remembered.  Agents do not all tell it with each hook.
 session_model () {
-	model=
 	state=$home/run/$agent/$sid
-	if test -f "$state"
+	if test -z "$model" && test -f "$state"
 	then
 		while IFS='=' read -r key value
 		do
 			test "$key" = model && model=$value
 		done <"$state"
 	fi
-	if test -z "$model" && test -n "$transcript" && test -r "$transcript"
+	if test -z "$model" && test -n "$transcript" && test -r "$transcript" &&
+	   command -v "model_$agent" >/dev/null
 	then
 		model=$(tail -n 50 "$transcript" | "model_$agent")
 		if test -n "$model"
@@ -307,6 +430,68 @@ session_model () {
 	esac
 }
 
+# The paths that the edit changes, one per line: the file of the edit
+# tool, or for Codex the files that the patch in $cmd adds, updates,
+# deletes or moves to.  Codex reads each line of its patch with the
+# white space around it trimmed, and resolves relative paths from the
+# directory of the session; the grammar of apply_patch is in
+# codex-rs/apply-patch/src/parser.rs (github.com/openai/codex).
+edit_paths () {
+	case "$agent" in
+	codex)
+		printf '%s\n' "$cmd" | sed -n -E \
+			's/^[[:space:]]*\*\*\* (Add File|Update File|Delete File|Move to): (.*[^[:space:]])[[:space:]]*$/\2/p' ;;
+	*)
+		test -z "$path" || printf '%s\n' "$path" ;;
+	esac
+}
+
+# Stamp $1 (begin or end) for the paths of the edit, with one stamp for
+# all the paths in the same worktree: begin and end stamps for single
+# paths in turn would take the index content of the other paths.
+edit_stamps () {
+	what=$1
+	paths=$(edit_paths)
+	us=$(printf '\037')
+	list=
+	while IFS= read -r p
+	do
+		if test -n "$p" && file_worktree "$p"
+		then
+			list=$list$top$us$rel$nl
+		fi
+	done <<EOF
+$paths
+EOF
+	export GIT_LITERAL_PATHSPECS=1
+	seen=$nl
+	while IFS= read -r line
+	do
+		test -n "$line" || continue
+		top=${line%%"$us"*}
+		case "$seen" in
+		*"$nl$top$nl"*) continue ;;
+		esac
+		seen=$seen$top$nl
+		set --
+		while IFS= read -r other
+		do
+			test "${other%%"$us"*}" = "$top" && set -- "$@" "${other#*"$us"}"
+		done <<EOF
+$list
+EOF
+		if test "$what" = begin
+		then
+			begin -- "$@"
+		elif open_interval
+		then
+			stamp -C "$top" stamp end --session "$sid" -- "$@"
+		fi
+	done <<EOF
+$list
+EOF
+}
+
 begin () {
 	session_model
 	if test -n "$model"
@@ -316,6 +501,79 @@ begin () {
 	else
 		stamp -C "$top" stamp begin --session "$sid" --tool "$tool" "$@"
 	fi
+}
+
+# Record an edit that the agent tells after it made it, with the file
+# $path as it is now and the replacements it made, in .edits of the
+# hook input: [{old_string, new_string}, ...] in the order they were
+# made.  The content before is that of the file with the replacements
+# undone, the last one first.  Where that is not certain, the edit is
+# not recorded, and its lines count as written by a human, never the
+# other way round: a replacement whose new text is empty, or is not
+# found exactly once; and a write of the whole file (empty old text)
+# of a path that git tracks, whose content before is unknown.
+# shellcheck disable=SC2317 # called for agents with an edit event
+record_edit () {
+	test -n "$cwd" || cwd=$workspace
+	test -n "$path" && file_worktree "$path" || return 0
+	test -f "$f" || return 0
+	export GIT_LITERAL_PATHSPECS=1
+	tmp=$(mktemp "${TMPDIR:-/tmp}/agit-hook.XXXXXX") || return 0
+	# The content must be UTF-8 text, which jq keeps as it is.
+	if test "$(jq -Rsj . "$f" 2>/dev/null | cksum)" != "$(cksum <"$f")"
+	then
+		rm -f "$tmp"
+		log "$rel: not UTF-8 text; the edit is not recorded"
+		return 0
+	fi
+	printf '%s' "$input" | jq -j --rawfile cur "$f" '
+		if (.edits | type) != "array" or .edits == [] then "X"
+		else reduce (.edits | reverse[]) as $e ({s: $cur, ok: true, whole: false};
+			if (.ok | not) then .
+			elif ($e | type) != "object" or ($e.old_string | type) != "string"
+			     or ($e.new_string | type) != "string" or $e.new_string == ""
+			then .ok = false
+			elif $e.old_string == "" and $e.new_string == .s
+			then .s = "" | .whole = true
+			else (.s | split($e.new_string)) as $parts
+				| if ($parts | length) == 2
+				  then .s = $parts[0] + $e.old_string + $parts[1]
+				  else .ok = false end
+			end)
+		| if .ok | not then "X" elif .whole then "W" + .s else "E" + .s end
+		end' >"$tmp" 2>/dev/null || { rm -f "$tmp"; log "$rel: cannot read the edit"; return 0; }
+	kind=$(head -c 1 "$tmp")
+	case "$kind" in
+	W)
+		if "$GIT" -C "$top" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1
+		then
+			rm -f "$tmp"
+			log "$rel: a write of the whole file, whose content before is unknown; not recorded"
+			return 0
+		fi ;;
+	E) ;;
+	*)
+		rm -f "$tmp"
+		log "$rel: the replacements cannot be undone with certainty; the edit is not recorded"
+		return 0 ;;
+	esac
+	if ! tail -c +2 "$tmp" >"$tmp.pre"
+	then
+		rm -f "$tmp" "$tmp.pre"
+		return 0
+	fi
+	mv -f "$tmp.pre" "$tmp"
+	# git stamp edit records no model or tool: a begin and an end with
+	# nothing between them do, once for the session in the journal.
+	entries=$("$GIT" -C "$top" stamp list --session "$sid" 2>/dev/null) || entries=
+	case "$nl$entries" in
+	*"${nl}begin "*) ;;
+	*)
+		begin -- "$rel" &&
+		stamp -C "$top" stamp end --session "$sid" -- "$rel" ;;
+	esac
+	stamp -C "$top" stamp edit --session "$sid" --path "$rel" --pre "$tmp"
+	rm -f "$tmp"
 }
 
 pre_commit () {
@@ -337,17 +595,12 @@ pre_commit () {
 	*"${nl}begin "*) ;;
 	*) return 0 ;;
 	esac
-	test -n "$transcript" && test -r "$transcript" || return 0
+	test -n "$transcript" && test -r "$transcript" &&
+	command -v "summary_$agent" >/dev/null || return 0
 	summary=$("summary_$agent" "$transcript")
 	test -n "$summary" || return 0
-	if test "$opt_transcript" = true
-	then
-		set -- --transcript "$transcript"
-	else
-		set --
-	fi
 	printf '%s\n' "$summary" |
-	stamp -C "$top" stamp reason --session "$sid" --summary - "$@"
+	stamp -C "$top" stamp reason --session "$sid" --summary -
 }
 
 main () {
@@ -361,7 +614,7 @@ main () {
 		exit 0
 	fi
 	case "$agent" in
-	claude) ;;
+	claude|codex|cursor|gemini) ;;
 	*) log "unknown agent"; exit 0 ;;
 	esac
 	input=$(cat)
@@ -375,23 +628,36 @@ main () {
 	session-start)
 		session_start ;;
 	session-end)
-		rm -f "$home/run/$agent/$sid" 2>/dev/null ;;
+		rm -f "$home/run/$agent/$sid" "$home/run/$agent/$sid".* 2>/dev/null ;;
 	pre-edit)
-		test -n "$path" && file_worktree "$path" || exit 0
-		export GIT_LITERAL_PATHSPECS=1
-		begin -- "$rel" ;;
+		edit_stamps begin ;;
 	post-edit)
-		test -n "$path" && file_worktree "$path" || exit 0
-		open_interval || exit 0
-		export GIT_LITERAL_PATHSPECS=1
-		stamp -C "$top" stamp end --session "$sid" -- "$rel" ;;
+		edit_stamps end ;;
+	edit)
+		record_edit ;;
 	pre-shell)
+		if test -n "$remember_cwd"
+		then
+			state=$home/run/$agent
+			# Once per session, as there is no session-start.
+			if ! test -f "$state/$sid.shell-cwd"
+			then
+				mkdir -p "$state" 2>/dev/null
+				find "$state" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
+			fi
+			printf '%s\n' "$cwd" >"$state/$sid.shell-cwd" 2>/dev/null
+		fi
 		read_conf
 		test "$opt_shell" = true || exit 0
 		moves_head && exit 0
 		worktree "$cwd" || exit 0
 		begin ;;
 	post-shell)
+		if test -z "$cwd" && test -n "$remember_cwd"
+		then
+			cwd=$(cat "$home/run/$agent/$sid.shell-cwd" 2>/dev/null) ||
+			cwd=$workspace
+		fi
 		read_conf
 		test "$opt_shell" = true || exit 0
 		moves_head && exit 0

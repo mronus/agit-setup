@@ -1,0 +1,76 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "name": "agit-session-start",
+            "type": "command",
+            "command": "sh \"${extensionPath}/../../bin/agit-hook\" gemini session-start",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "name": "agit-session-end",
+            "type": "command",
+            "command": "sh \"${extensionPath}/../../bin/agit-hook\" gemini session-end",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "^(write_file|replace)$",
+        "hooks": [
+          {
+            "name": "agit-pre-edit",
+            "type": "command",
+            "command": "sh \"${extensionPath}/../../bin/agit-hook\" gemini pre-edit",
+            "timeout": 30000
+          }
+        ]
+      },
+      {
+        "matcher": "^run_shell_command$",
+        "hooks": [
+          {
+            "name": "agit-pre-shell",
+            "type": "command",
+            "command": "sh \"${extensionPath}/../../bin/agit-hook\" gemini pre-shell",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "^(write_file|replace)$",
+        "hooks": [
+          {
+            "name": "agit-post-edit",
+            "type": "command",
+            "command": "sh \"${extensionPath}/../../bin/agit-hook\" gemini post-edit",
+            "timeout": 30000
+          }
+        ]
+      },
+      {
+        "matcher": "^run_shell_command$",
+        "hooks": [
+          {
+            "name": "agit-post-shell",
+            "type": "command",
+            "command": "sh \"${extensionPath}/../../bin/agit-hook\" gemini post-shell",
+            "timeout": 30000
+          }
+        ]
+      }
+    ]
+  }
+}
