@@ -313,12 +313,16 @@ EOF
 chmod +x "$tmp/bin/cursor"
 cursor_file=$HOME/.cursor/hooks.json
 mkdir -p "$HOME/.cursor"
-cat >"$cursor_file" <<'EOF'
+# The user's hooks, and those that agit-setup added for Cursor 2.
+cat >"$tmp/cursor-user.json" <<'EOF'
 {
   "version": 1,
   "hooks": {
     "beforeShellExecution": [
       { "command": "./hooks/block-git.sh" }
+    ],
+    "preToolUse": [
+      { "command": "./hooks/guard.sh", "matcher": "Shell" }
     ],
     "stop": [
       { "command": "./hooks/audit.sh" }
@@ -326,30 +330,42 @@ cat >"$cursor_file" <<'EOF'
   }
 }
 EOF
+jq --arg w "sh \"$root/bin/agit-hook\" cursor" '
+	.hooks.afterFileEdit = [{command: ($w + " edit"), timeout: 30}]
+	| .hooks.beforeShellExecution += [{command: ($w + " pre-shell"), timeout: 30}]
+	| .hooks.afterShellExecution = [{command: ($w + " post-shell"), timeout: 30}]' \
+	"$tmp/cursor-user.json" >"$cursor_file"
 cp "$cursor_file" "$tmp/cursor-original.json"
 cd "$tmp/project"
 run 0 add cursor --yes
 run 0 add cursor --scope project --yes
 same "$cursor_file.agit-backup" "$tmp/cursor-original.json" || fail "cursor: no backup"
 want="sh \"$root/bin/agit-hook\" cursor"
-jq -e --arg w "$want" '.version == 1
+jq -e --arg w "$want" '
+	def h($e; $m): {command: ($w + " " + $e), matcher: $m, timeout: 30};
+	.version == 1
+	and (.hooks | keys) == ["beforeShellExecution", "postToolUse", "postToolUseFailure",
+		"preToolUse", "sessionEnd", "sessionStart", "stop"]
 	and .hooks.stop == [{command: "./hooks/audit.sh"}]
-	and .hooks.beforeShellExecution == [{command: "./hooks/block-git.sh"},
-		{command: ($w + " pre-shell"), timeout: 30}]
-	and .hooks.afterFileEdit == [{command: ($w + " edit"), timeout: 30}]
-	and .hooks.afterShellExecution == [{command: ($w + " post-shell"), timeout: 30}]' \
+	and .hooks.beforeShellExecution == [{command: "./hooks/block-git.sh"}]
+	and .hooks.sessionStart == [{command: ($w + " session-start"), timeout: 10}]
+	and .hooks.sessionEnd == [{command: ($w + " session-end"), timeout: 10}]
+	and .hooks.preToolUse == [{command: "./hooks/guard.sh", matcher: "Shell"},
+		h("pre-edit"; "^(Write|Delete)$"), h("pre-shell"; "^Shell$")]
+	and .hooks.postToolUse == [h("post-edit"; "^(Write|Delete)$"), h("post-shell"; "^Shell$")]
+	and .hooks.postToolUseFailure == .hooks.postToolUse' \
 	"$cursor_file" >/dev/null || fail "cursor: unexpected hooks file: $(cat "$cursor_file")"
-jq -e --arg w "$want" '.version == 1 and (.hooks | keys) ==
-	["afterFileEdit", "afterShellExecution", "beforeShellExecution"]' \
+jq -e '.version == 1 and (.hooks | keys) ==
+	["postToolUse", "postToolUseFailure", "preToolUse", "sessionEnd", "sessionStart"]' \
 	"$tmp/project/.cursor/hooks.json" >/dev/null ||
 fail "cursor: unexpected project hooks file: $(cat "$tmp/project/.cursor/hooks.json")"
 test "$(git config --file "$conf" --get-all agent.cursor.install)" = "user:$cursor_file
 project:$tmp/project/.cursor/hooks.json" || fail "cursor: installs not recorded"
 grep -q "cursor:" "$calls" && fail "cursor was run: $(cat "$calls")"
 # Cursor runs a hook command with its input in a here-document.
-cmd=$(jq -r '.hooks.afterFileEdit[0].command' "$cursor_file")
-input=$(jq -c '.workspace_roots = [$d] | .file_path = $d + "/x.txt"' --arg d "$tmp" \
-	"$root/test/fixtures/cursor/after-file-edit.json")
+cmd=$(jq -r '.hooks.preToolUse[1].command' "$cursor_file")
+input=$(jq -c '.workspace_roots = [$d] | .tool_input.file_path = $d + "/x.txt"' --arg d "$tmp" \
+	"$root/test/fixtures/cursor/pre-tool-use-write.json")
 sh -c "$cmd <<'CURSOR_HOOK_EOF'
 $input
 CURSOR_HOOK_EOF" >"$tmp/hook-out" 2>&1 || fail "cursor: the hook command failed"
@@ -361,13 +377,13 @@ ok "add cursor"
 
 echo "== status and remove cursor"
 run 0 status cursor
-grep -qF "$cursor_file: agit hooks for afterFileEdit, afterShellExecution, beforeShellExecution" "$tmp/out" ||
+grep -qF "$cursor_file: agit hooks for postToolUse, postToolUseFailure, preToolUse, sessionEnd, sessionStart" "$tmp/out" ||
 fail "status cursor"
 grep -qF "$tmp/project/.cursor/hooks.json: agit hooks for" "$tmp/out" || fail "status cursor, project"
 cd "$tmp"
 run 0 remove cursor
-test "$(jq -S . "$cursor_file")" = "$(jq -S . "$tmp/cursor-original.json")" ||
-fail "cursor: remove did not restore the file: $(cat "$cursor_file")"
+test "$(jq -S . "$cursor_file")" = "$(jq -S . "$tmp/cursor-user.json")" ||
+fail "cursor: remove did not leave the user's hooks: $(cat "$cursor_file")"
 test "$(jq -c . "$tmp/project/.cursor/hooks.json")" = '{"version":1,"hooks":{}}' ||
 fail "cursor: project file after remove: $(cat "$tmp/project/.cursor/hooks.json")"
 ok "remove cursor"
