@@ -1,0 +1,99 @@
+version 1
+commit f8bf5623d0be5eaa248511bcfc77fe57488ffb98
+capture observed git/2.56.0.agit.2
+actor human human ident=M. Abdullah Onus <mronus@gmail.com>
+file agents/cursor/hooks.json
++ 4 HUMAN human 45d733a1e7dadde6b0225cb2b51798cead5f02e5
++ 6-13 HUMAN human 09cca1670e2e1e727a5cbfb4b78ba88a882c3568
++ 16-21 HUMAN human 4725253f7ca7f90a79480ee9ebded2f5bdad1c09
++ 24 HUMAN human e4d66ec1b11e37742093e3f5b01845a5b90b4796
++ 28-45 HUMAN human 46b9a4a5cd08696624adc9e1efb63e6e254ba12e
++ 48 HUMAN human e4d66ec1b11e37742093e3f5b01845a5b90b4796
+- 4 HUMAN human f97efd90f872898f585ce88abfe3227d5a797ef6
+- 6-7 HUMAN human 2aaca4abd041ef3a10f2696f60c7c0ee5f0fe0b7
+- 10 HUMAN human da31ff49e0dcc9719e0d6537addf746d18044258
+- 16 HUMAN human f05d0f1dd5e0096daa975767a07ec68969abe467
+file bin/agit-hook
++ 292-296 HUMAN human 0ee6cd799e6438ac3e8615cdf531241c0106daba
++ 302-308 HUMAN human fbc5d17f9c1b0b1cf59c0cdaac07ba0a8b1b653c
++ 311 HUMAN human b7e7bc89a1175ca581a52a7d28539ef2eb367f3c
++ 362-366 HUMAN human 6be34bc9974606ce0b175733d4743c93cb8183fe
+- 23-24 HUMAN human 8cb992faf155a901eec0c55fa66d51db1396e92a
+- 40-41 HUMAN human 7cfba5cd4c6b5aa8a69bb750b2d001d70e310549
+- 296-297 HUMAN human 7db06ad6fa42ec46a2a6374ab1ec8d3daec25073
+- 303-305 HUMAN human 0925c413501d9d2ba64aa05edd1249320bff1f10
+- 308-309 HUMAN human a67c9e8a0a8214c3a6951eb4101d1c8c778c7141
+- 506-578 HUMAN human 6fee416b5fef170f0d4085209fcfa1ba97c7d6dc
+- 636-637 HUMAN human dc742f399112a96df8ccc85bdec8b3ee7e586051
+- 639-649 HUMAN human 4ac7888fc4bc7cb5c18ab70eea4132c253c19190
+- 656-660 HUMAN human 285144eb31f96341df2ab79e0c0bf0be2026100a
+file bin/agit-setup
++ 572-578 HUMAN human bc691e2c2ff2fc045a8ff6ea4e6e4238bbc93cde
+- 572-578 HUMAN human 742c850535f026dbc48cfb494dee76b91a2a01dc
+file test/fixtures/cursor/after-file-edit.json
+- 1-14 HUMAN human b7950f4b978b7cc1856652cf359cb241976ca816
+file test/fixtures/cursor/after-shell-execution.json
+- 1-14 HUMAN human 9df0432cc546cf90a85e1e9dd9f96409e06df3c5
+file test/fixtures/cursor/before-shell-execution.json
+- 1-13 HUMAN human 03dca22bf91981ea5a9c3684c857607f8b46b0e9
+file test/fixtures/cursor/post-tool-use-delete.json
++ 1-19 HUMAN human b1042b85739f1021575befe1d515f922d874dcfe
+file test/fixtures/cursor/post-tool-use-failure-shell.json
++ 1-23 HUMAN human a111c4e1e0ff9775a368d0f5f2dd663014199b06
+file test/fixtures/cursor/post-tool-use-failure-write.json
++ 1-22 HUMAN human c7921eab721250dbf9faecc67d3114729fd9e260
+file test/fixtures/cursor/post-tool-use-shell.json
++ 1-21 HUMAN human 022b9afb22461106ac7db5412bf2cc59c95a056f
+file test/fixtures/cursor/post-tool-use-write.json
++ 1-20 HUMAN human aab4779220527e3c5405fc15d2252e97d64c653c
+file test/fixtures/cursor/pre-tool-use-delete.json
++ 1-17 HUMAN human 5c501967f74e9588985640f694f7e38a5c56bb5c
+file test/fixtures/cursor/pre-tool-use-shell.json
++ 1-19 HUMAN human 45241c6b47b6d84e4b61f45a4201dab5982eecfb
+file test/fixtures/cursor/pre-tool-use-write.json
++ 1-16 HUMAN human d3744c73a81c4a7b663912418fa41eac927875b5
+file test/fixtures/cursor/session-end.json
++ 1-14 HUMAN human db99d3e69aa4e14155ee41c56a5b89a64799baf7
+file test/fixtures/cursor/session-start.json
++ 1-12 HUMAN human b723d05f79ffc9a967043e790ca999e39ea80de4
+file test/hook-test.sh
++ 540 HUMAN human b003a43089cad6b3ef7848a403a37a7c5510c4b2
++ 543-549 HUMAN human ca8b89d7f9f51f990aa44167c56fc00a02ded291
++ 551-561 HUMAN human 4a04da3fadff1b6f7152e5c43263245b1a15710a
++ 563-564 HUMAN human 0972d806d91d1da504d5937812e5c3952d1b79b9
++ 567-580 HUMAN human 1df499db55ec5a8e55b01fef758bba60d375d20e
++ 582-594 HUMAN human 240d775449b4c1ccd99ece8c4b3fdfcc4b9118f9
++ 599 HUMAN human d777b695b60693f16fe74651a98f69f98e9f79ed
++ 602-603 HUMAN human f072e2ac0bb83059d62246bc18109d5b41c504c3
++ 605 HUMAN human cceb8a22e960c990a9961e66b5dd809bc7d67b57
++ 609-615 HUMAN human e84963ee088ae7055b975119381a2c7004aa98e4
++ 617-619 HUMAN human a64560105c3fc20ffb783ed003c3a203a8e25aa7
++ 624-625 HUMAN human 0fd2a5d096f9853892df2a6202abbc5c985f8481
+- 540-541 HUMAN human d9c5741195ccd4685f1c06c2b812ad591874d114
+- 544-560 HUMAN human d2392401ba74c341428f81d8904d39d00ce796e2
+- 562 HUMAN human 2b617b227a1052a02699464daa8022ff0d1c9733
+- 564-573 HUMAN human 71ca19620544fc6b7e6854ff542bc40469ab36a0
+- 576-601 HUMAN human 2988f2796e3b2c483a4866e93337828fa24fcd9d
+- 603-605 HUMAN human d51e5e828be43579df184099179e16f77a39ade1
+- 610 HUMAN human 8ddd9264ac18f8fb3e3ac6b85cee28dc62f896a7
+- 612-613 HUMAN human 7847dab6315b8451939e203aea245d353b159bba
+- 615 HUMAN human 648135a6445e3ea5c19f3e4a0ede4f7f27be7043
+- 621-624 HUMAN human 50e155d11d1b89528e8f3c6676c37589027bcea4
+- 630 HUMAN human 16820e466f3864d9efaf6a383830d9e5472a112d
+file test/setup-test.sh
++ 316-317 HUMAN human 9354fded2023c0f862d382c96311c76440528943
++ 324-326 HUMAN human a40b3ce62b8c88ad92869ca00301439f83955862
++ 333-337 HUMAN human b2f39736dbb7e1b7c63ba67447ac7b4f55d35b62
++ 344-348 HUMAN human 491437a5c3a60d1a434f72911e1c3870e746fefa
++ 350-356 HUMAN human 7aea65ca48c1d304cdf561778a1933e16745c312
++ 358-359 HUMAN human 4f10ee8cda69c7959a08bda5d845ff261797ccfb
++ 366-368 HUMAN human 03cb0161c83ddd1efc3f61ef7bb07050bb91a0d1
++ 380 HUMAN human f3adf9f64dbe2d4f8cd8aea357fdc220721847bf
++ 385-386 HUMAN human 4be03b1c4de977b55b40769b931a822398948497
+- 316 HUMAN human 3a1386b3f4fc2b99df6782e68a3ea2b1a3b57cad
+- 335 HUMAN human 9f156f1d253c11aa6177af138b25cf6eea2c0250
+- 337-340 HUMAN human 443cde0034bf3a427e8576867067a1449b31ebb3
+- 342-343 HUMAN human ec1efcd895a2539d8ee31f94518c91cd6ddec4d2
+- 350-352 HUMAN human 3c56d3ccc76ea4373e88397f51286e9b4406e6c2
+- 364 HUMAN human 5d7d5f17e0e5ba0939e5dcda937e625b34ecb236
+- 369-370 HUMAN human 661646cf38fe19a27fac6b73d54ccb0f9fdb5d3c
