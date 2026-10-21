@@ -569,13 +569,13 @@ status_codex () {
 
 # --- Cursor: ~/.cursor/hooks.json, or .cursor/hooks.json of a project -
 #
-# https://cursor.com/docs/hooks.  Cursor has no hook before a file
-# edit: afterFileEdit tells the edit, and agit-hook records it with git
-# stamp edit.  Its sessionStart hook is left out: Cursor drops the
-# context it returns (a known bug), and Cursor versions that do not
-# know an event reject the whole hooks file, the user's hooks with it.
-# The hooks print nothing, which leaves the decision on a shell command
-# to Cursor and to the other hooks.
+# https://cursor.com/docs/hooks, for Cursor 3.  The agent writes and
+# deletes files with its Write and Delete tools, and runs commands with
+# Shell: preToolUse and postToolUse, or postToolUseFailure, come before
+# and after each.  The env that sessionStart may return reaches only
+# the later hooks of the session, not the shell commands of the agent,
+# so agit-hook returns none.  The tool hooks print nothing, which
+# leaves the decision on a tool to Cursor and to the other hooks.
 
 cursor_file () {
 	case "$1" in

@@ -1,21 +1,51 @@
 {
   "version": 1,
   "hooks": {
-    "afterFileEdit": [
+    "sessionStart": [
       {
-        "command": "sh \"@AGIT_HOOK@\" cursor edit",
-        "timeout": 30
+        "command": "sh \"@AGIT_HOOK@\" cursor session-start",
+        "timeout": 10
       }
     ],
-    "beforeShellExecution": [
+    "sessionEnd": [
+      {
+        "command": "sh \"@AGIT_HOOK@\" cursor session-end",
+        "timeout": 10
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "sh \"@AGIT_HOOK@\" cursor pre-edit",
+        "matcher": "^(Write|Delete)$",
+        "timeout": 30
+      },
       {
         "command": "sh \"@AGIT_HOOK@\" cursor pre-shell",
+        "matcher": "^Shell$",
         "timeout": 30
       }
     ],
-    "afterShellExecution": [
+    "postToolUse": [
+      {
+        "command": "sh \"@AGIT_HOOK@\" cursor post-edit",
+        "matcher": "^(Write|Delete)$",
+        "timeout": 30
+      },
       {
         "command": "sh \"@AGIT_HOOK@\" cursor post-shell",
+        "matcher": "^Shell$",
+        "timeout": 30
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "sh \"@AGIT_HOOK@\" cursor post-edit",
+        "matcher": "^(Write|Delete)$",
+        "timeout": 30
+      },
+      {
+        "command": "sh \"@AGIT_HOOK@\" cursor post-shell",
+        "matcher": "^Shell$",
         "timeout": 30
       }
     ]

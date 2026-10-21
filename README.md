@@ -88,7 +88,7 @@ agit-setup remove <agent>
 ```
 
 The agents are `claude-code` (Claude Code), `codex` (Codex CLI),
-`cursor` (Cursor: the agent of the editor, and the `cursor agent`
+`cursor` (Cursor 3: the agent of the editor, and the `cursor agent`
 command) and `gemini` (Gemini CLI). The menu offers those it finds.
 Each is connected for all your projects (`--scope user`, the default)
 or, where the agent has project settings, for the one in the current
@@ -138,20 +138,15 @@ What each agent records:
                               commands           context    a commit
 Claude Code        yes        yes        yes     yes        yes
 Codex CLI          yes        yes        yes     yes        no
-Cursor             after      yes        yes     no         no
-                   the edit
+Cursor             yes        yes        yes     yes        no
 Gemini CLI         yes        yes        no      yes        no
 ```
 
-- Cursor has no hook before a file edit. After an edit, it tells the
-  text each replacement put in; `agit-hook` undoes them on the file to
-  find its content before, and records the edit with `git stamp edit`.
-  When that is not certain (the new text is not found exactly once, or
-  the agent rewrote a whole file that Git tracks), the edit is not
-  recorded and its lines count as human, and `~/.agit/log/hook.log`
-  says so. Cursor's session-start hook is left out: Cursor drops the
-  context it returns, and versions that do not know it reject the
-  whole hooks file. So Cursor's agent is not asked for its reasons.
+- Cursor needs version 3. The hooks stamp around its agent's `Write`,
+  `Delete` and `Shell` tools; the lines of Tab completions and of
+  inline edits (Cmd+K) count as human. Cursor also runs the hooks of
+  Claude Code plugins; those of the agit plugin then do nothing, so
+  Cursor's work is recorded once, by the Cursor hooks.
 - The summary before a commit comes from the session transcript, whose
   format only Claude Code documents.
 - Gemini CLI does not tell the hooks its model.

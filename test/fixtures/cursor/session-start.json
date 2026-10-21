@@ -1,0 +1,12 @@
+{
+  "conversation_id": "5f0e9d1c-2b7a-4c3e-9a51-6d2f8e4b7c10",
+  "generation_id": "",
+  "model": "claude-4.5-sonnet",
+  "model_id": "claude-4.5-sonnet",
+  "is_background_agent": false,
+  "composer_mode": "agent",
+  "session_id": "5f0e9d1c-2b7a-4c3e-9a51-6d2f8e4b7c10",
+  "hook_event_name": "sessionStart",
+  "cursor_version": "3.26.13",
+  "workspace_roots": ["/home/user/project"]
+}

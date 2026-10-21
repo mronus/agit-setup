@@ -1,0 +1,23 @@
+{
+  "conversation_id": "5f0e9d1c-2b7a-4c3e-9a51-6d2f8e4b7c10",
+  "generation_id": "a3c1e7f2-8d4b-4e6a-b1f9-0c2d5e8a7b34",
+  "model": "claude-4.5-sonnet",
+  "model_id": "claude-4.5-sonnet",
+  "tool_name": "Shell",
+  "tool_input": {
+    "command": "npm install",
+    "cwd": ""
+  },
+  "tool_use_id": "toolu_01Y4z5A6b7C8d9E0f1G2h3J4",
+  "session_id": "5f0e9d1c-2b7a-4c3e-9a51-6d2f8e4b7c10",
+  "hook_event_name": "postToolUseFailure",
+  "cursor_version": "3.26.13",
+  "workspace_roots": [
+    "/home/user/project"
+  ],
+  "cwd": "",
+  "error_message": "Command failed with exit code 1",
+  "failure_type": "error",
+  "duration": 456.7,
+  "is_interrupt": false
+}

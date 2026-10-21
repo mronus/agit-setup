@@ -28,7 +28,7 @@ trap 'rm -rf "$tmp"' EXIT
 tmp=$(cd "$tmp" && pwd -P)
 export AGIT_HOME="$tmp/agit-home"
 export AGIT_GIT="$GIT"
-unset CLAUDE_ENV_FILE
+unset CLAUDE_ENV_FILE CURSOR_PLUGIN_ROOT
 export GIT_CONFIG_NOSYSTEM=1
 export HOME="$tmp/home"
 mkdir -p "$HOME" "$AGIT_HOME"
@@ -169,6 +169,26 @@ mkdir -p "$tmp/plain"
 hook session-start "$tmp/plain"
 test -s "$tmp/out" && fail "session-start outside a repository printed: $(cat "$tmp/out")"
 ok "no context outside a repository"
+
+echo "== the Claude Code plugin run by Cursor"
+mv "$AGIT_HOME/run/claude/$sid" "$tmp/claude-state"
+export CURSOR_PLUGIN_ROOT="$root/plugins/claude-code"
+hook session-start "$repo"
+test -s "$tmp/out" && fail "session-start under Cursor printed: $(cat "$tmp/out")"
+test -e "$AGIT_HOME/run/claude/$sid" && fail "session-start under Cursor remembered the model"
+hook pre-edit "$repo" "$repo/hello.txt"
+hook post-edit "$repo" "$repo/hello.txt"
+hook pre-shell "$repo" "echo x >x.txt"
+hook post-shell "$repo" "echo x >x.txt"
+# The plugin runs agit-hook through its own bin/agit-hook.
+input pre-edit "$repo" "$repo/hello.txt" |
+sh "$root/plugins/claude-code/bin/agit-hook" claude pre-edit >"$tmp/out" 2>&1 ||
+fail "the plugin's agit-hook failed under Cursor"
+test -s "$tmp/out" && fail "the plugin's agit-hook printed under Cursor: $(cat "$tmp/out")"
+test -z "$(journal "$repo")" || fail "stamps under Cursor: $(journal "$repo")"
+unset CURSOR_PLUGIN_ROOT
+mv "$tmp/claude-state" "$AGIT_HOME/run/claude/$sid"
+ok "the Claude Code plugin does nothing when Cursor runs it"
 
 echo "== edits"
 hook pre-edit "$repo" "$repo/hello.txt"
@@ -537,97 +557,93 @@ ag=cursor
 sid=5f0e9d1c-2b7a-4c3e-9a51-6d2f8e4b7c10
 new_repo cursor
 cu=$tmp/cursor
-printf 'one\ntwo\ntwo\nthree\n' >"$cu/twice.txt"
-printf 'kept\n' >"$cu/whole.txt"
+printf 'keep\n' >"$cu/delete-me.txt"
 "$GIT" -C "$cu" add .
 "$GIT" -C "$cu" commit -q -m files
-# cursor_edit <file> <edits>: the hook after the edit, made already.
-cursor_edit () {
-	fixture after-file-edit \
-		'.conversation_id = $s | .workspace_roots = [$w] | .file_path = $f | .edits = $e' \
-		--arg s "$sid" --arg w "$cu" --arg f "$1" --argjson e "$2" | run_hook edit
+# cursor_tool <event> <fixture> <jq filter> <jq args>...: a tool hook,
+# in the workspace $cu.
+cursor_tool () {
+	ev=$1 fx=$2 filter=$3
+	shift 3
+	fixture "$fx" ".conversation_id = \$s | .session_id = \$s | .workspace_roots = [\$w] | $filter" \
+		--arg s "$sid" --arg w "$cu" "$@" | run_hook "$ev"
 }
-cursor_shell () {
-	case "$1" in
-	pre-shell)
-		fixture before-shell-execution \
-			'.conversation_id = $s | .workspace_roots = [$w] | .cwd = $c | .command = $x' \
-			--arg s "$sid" --arg w "$cu" --arg c "$2" --arg x "$3" ;;
-	*)
-		fixture after-shell-execution \
-			'.conversation_id = $s | .workspace_roots = [$w] | .command = $x' \
-			--arg s "$sid" --arg w "$cu" --arg x "$3" ;;
-	esac | run_hook "$1"
-}
-# One replacement.
+fixture session-start '.conversation_id = $s | .session_id = $s | .workspace_roots = [$w]' \
+	--arg s "$sid" --arg w "$cu" | run_hook session-start
+if ! jq -r .additional_context "$tmp/out" |
+   grep -qF "git stamp reason --session $sid --summary -"
+then
+	fail "cursor session-start: $(cat "$tmp/out")"
+fi
+grep -qx "model=claude-4.5-sonnet" "$AGIT_HOME/run/cursor/$sid" || fail "cursor: the model was not remembered"
+# Write of a file in the workspace, and of a new file in a directory
+# that does not exist yet.
+cursor_tool pre-edit pre-tool-use-write '.tool_input.file_path = $f' --arg f "$cu/hello.txt"
 printf 'one\nTWO by cursor\nthree\n' >"$cu/hello.txt"
-cursor_edit "$cu/hello.txt" '[{"old_string": "two", "new_string": "TWO by cursor"}]'
-# Two replacements in one edit, the second inside the text of the first.
-printf 'one\nTWO by cursor\nthree, 3 by cursor\n' >"$cu/hello.txt"
-cursor_edit "$cu/hello.txt" '[{"old_string": "three", "new_string": "three, 3"},
-	{"old_string": "3", "new_string": "3 by cursor"}]'
-# The editor's agent tells the whole file before and after.
-printf 'one\ntwo\ntwo\nthree by cursor\n' >"$cu/twice.txt"
-cursor_edit "$cu/twice.txt" '[{"old_string": "one\ntwo\ntwo\nthree\n",
-	"new_string": "one\ntwo\ntwo\nthree by cursor\n"}]'
-# A new file, written whole.
+cursor_tool post-edit post-tool-use-write '.tool_input.file_path = $f' --arg f "$cu/hello.txt"
+cursor_tool pre-edit pre-tool-use-write '.tool_input.file_path = $f' --arg f "$cu/sub/new.txt"
 mkdir -p "$cu/sub"
 printf 'new by cursor\n' >"$cu/sub/new.txt"
-cursor_edit "$cu/sub/new.txt" '[{"old_string": "", "new_string": "new by cursor\n"}]'
-journal "$cu"
-test "$(journal "$cu" | grep -c "^edit .* $sid ")" = 4 || fail "cursor: expected 4 edits"
-test "$(journal "$cu" | grep -c "^begin .* $sid .* model=claude-4.5-sonnet tool=cursor$")" = 1 ||
-fail "cursor: expected one begin with the model and tool"
-# Not recorded: a replacement whose new text is twice in the file, one
-# whose new text is not there, one with an empty new text, the whole
-# write of a tracked file, and a file that is not UTF-8.
-printf 'one\ntwo\ntwo\nthree by cursor\nfour\n' >"$cu/twice.txt"
-cursor_edit "$cu/twice.txt" '[{"old_string": "", "new_string": "two"}]'
-cursor_edit "$cu/twice.txt" '[{"old_string": "x", "new_string": "not there"}]'
-cursor_edit "$cu/twice.txt" '[{"old_string": "five\n", "new_string": ""}]'
-printf 'rewritten by cursor\n' >"$cu/whole.txt"
-cursor_edit "$cu/whole.txt" '[{"old_string": "", "new_string": "rewritten by cursor\n"}]'
-printf 'caf\351\n' >"$cu/latin1.txt"
-cursor_edit "$cu/latin1.txt" '[{"old_string": "", "new_string": "x"}]'
-cursor_edit "$cu/hello.txt" '"not an array"'
-test "$(journal "$cu" | grep -c "^edit ")" = 4 || fail "cursor: uncertain edits recorded: $(journal "$cu")"
-for want in "twice.txt: the replacements cannot be undone" "whole.txt: a write of the whole file" \
-	"latin1.txt: not UTF-8 text" "hello.txt: the replacements cannot be undone"
-do
-	grep -qF "$want" "$AGIT_HOME/log/hook.log" || fail "cursor: not logged: $want"
-done
-rm -f "$AGIT_HOME/log/hook.log"
-# A shell command: afterShellExecution has no cwd.
-cursor_shell pre-shell "$cu/sub" "echo made by a command >../shell.txt"
+cursor_tool post-edit post-tool-use-write '.tool_input.file_path = $f' --arg f "$cu/sub/new.txt"
+# Delete of a tracked file, with no model in the hook input: the one
+# of the session is recorded.
+cursor_tool pre-edit pre-tool-use-delete '.tool_input.file_path = $f | del(.model)' \
+	--arg f "$cu/delete-me.txt"
+rm "$cu/delete-me.txt"
+cursor_tool post-edit post-tool-use-delete '.tool_input.file_path = $f' --arg f "$cu/delete-me.txt"
+# A Write that fails after it wrote part of the file.
+cursor_tool pre-edit pre-tool-use-write '.tool_input.file_path = $f' --arg f "$cu/partial.txt"
+printf 'partial by cursor\n' >"$cu/partial.txt"
+cursor_tool post-edit post-tool-use-failure-write '.tool_input.file_path = $f' --arg f "$cu/partial.txt"
+# Shell in the workspace (an empty cwd), and in a subdirectory named
+# relative to it.
+cursor_tool pre-shell pre-tool-use-shell '.tool_input.command = "echo x >shell.txt"'
 echo "made by a command" >"$cu/shell.txt"
-cursor_shell post-shell "" "echo made by a command >../shell.txt"
-cursor_shell pre-shell "$cu" "git commit -am x"
-cursor_shell post-shell "" "git commit -am x"
+cursor_tool post-shell post-tool-use-shell '.tool_input.command = "echo x >shell.txt"'
+cursor_tool pre-shell pre-tool-use-shell \
+	'.tool_input.command = "echo x >made.txt" | .tool_input.cwd = "sub" | .cwd = "sub"'
+echo "made by a command" >"$cu/sub/made.txt"
+cursor_tool post-shell post-tool-use-failure-shell \
+	'.tool_input.command = "echo x >made.txt" | .tool_input.cwd = "sub" | .cwd = "sub"'
+# A git command that moves HEAD is not stamped.
+cursor_tool pre-shell pre-tool-use-shell '.tool_input.command = "git commit -am x"'
+cursor_tool post-shell post-tool-use-shell '.tool_input.command = "git commit -am x"'
+journal "$cu"
+test "$(journal "$cu" | grep -c "^begin .* $sid .* model=claude-4.5-sonnet tool=cursor$")" = 6 ||
+fail "cursor: expected 6 begin entries with the model and tool"
+test "$(journal "$cu" | grep -c "^end .* $sid ")" = 6 || fail "cursor: expected 6 end entries"
 echo "by a human" >>"$cu/hello.txt"
 "$GIT" -C "$cu" add -A
 "$GIT" -C "$cu" commit -q -m cursor
 "$GIT" -C "$cu" provenance show HEAD
-test "$(marks "$cu" hello.txt)" = "2-3 AI
+test "$(marks "$cu" hello.txt)" = "2 AI
 4 HUMAN" || fail "cursor hello.txt: $(marks "$cu" hello.txt)"
-test "$(marks "$cu" twice.txt)" = "4 AI
-5 HUMAN" || fail "cursor twice.txt: $(marks "$cu" twice.txt)"
 test "$(marks "$cu" sub/new.txt)" = "1 AI" || fail "cursor new.txt: $(marks "$cu" sub/new.txt)"
-test "$(marks "$cu" whole.txt)" = "1 HUMAN" || fail "cursor whole.txt: $(marks "$cu" whole.txt)"
+test "$(marks "$cu" delete-me.txt -)" = "1 AI" || fail "cursor delete-me.txt: $(marks "$cu" delete-me.txt -)"
+test "$(marks "$cu" partial.txt)" = "1 AI" || fail "cursor partial.txt: $(marks "$cu" partial.txt)"
 test "$(marks "$cu" shell.txt)" = "1 AI" || fail "cursor shell.txt: $(marks "$cu" shell.txt)"
+test "$(marks "$cu" sub/made.txt)" = "1 AI" || fail "cursor made.txt: $(marks "$cu" sub/made.txt)"
 "$GIT" -C "$cu" provenance show HEAD | grep -q "model=claude-4.5-sonnet tool=cursor session=$sid" ||
 fail "cursor: no actor with the model and tool"
 ok "cursor edits and shell commands"
+# No model when Cursor cannot name it.
+mkdir -p "$tmp/cursor-plain"
+fixture session-start '.conversation_id = "other" | .model = "unknown" | .workspace_roots = [$w]' \
+	--arg w "$tmp/cursor-plain" | run_hook session-start
+test -s "$tmp/out" && fail "cursor session-start outside a repository printed: $(cat "$tmp/out")"
+test -e "$AGIT_HOME/run/cursor/other" && fail "cursor: the unknown model was remembered"
+ok "cursor: an unknown model"
 mkdir -p "$tmp/cursor-outside"
-printf 'x\n' >"$tmp/cursor-outside/x.txt"
-cursor_edit "$tmp/cursor-outside/x.txt" '[{"old_string": "", "new_string": "x\n"}]'
-fixture after-file-edit '.conversation_id = ""' | run_hook edit
-for ev in edit pre-shell post-shell
+fixture pre-tool-use-write '.conversation_id = $s | .workspace_roots = [$w] | .tool_input.file_path = "x.txt"' \
+	--arg s "$sid" --arg w "$tmp/cursor-outside" | run_hook pre-edit
+for ev in session-start session-end pre-edit post-edit pre-shell post-shell
 do
 	printf '{"conversation_id": ' | run_hook "$ev"
 done
 test -z "$(journal "$cu")" || fail "cursor stamps: $(journal "$cu")"
+fixture session-end '.conversation_id = $s | .session_id = $s' --arg s "$sid" | run_hook session-end
+test -e "$AGIT_HOME/run/cursor/$sid" && fail "cursor session-end left the state file"
 ok "cursor: nothing outside a repository, malformed input"
-rm -f "$AGIT_HOME/log/hook.log"
 ag=claude
 sid=test-session
 

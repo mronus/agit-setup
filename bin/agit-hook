@@ -20,8 +20,6 @@
 #   session-end    forget the session
 #   pre-edit       git stamp begin -- <file>, before the agent writes it
 #   post-edit      git stamp end -- <file>, after it did
-#   edit           git stamp edit, for an agent that tells an edit only
-#                  after it made it (Cursor)
 #   pre-shell      git stamp begin, whole tree, before a shell command
 #   post-shell     git stamp end, whole tree, after it
 #   pre-commit     before a shell command that runs git commit, record
@@ -37,8 +35,6 @@
 # shell without agit on PATH must still record.
 
 home=${AGIT_HOME:-${HOME:-/nonexistent}/.agit}
-remember_cwd=
-workspace=
 logdir=$home/log
 log=$logdir/hook.log
 conf=$home/setup.conf
@@ -73,6 +69,13 @@ fi
 
 agent=$1
 event=$2
+
+# Cursor runs Claude Code plugins too, with CURSOR_PLUGIN_ROOT set,
+# which Claude Code never sets; its own hooks record its edits.
+if test "$agent" = claude && test -n "$CURSOR_PLUGIN_ROOT"
+then
+	exit 0
+fi
 
 # Append a line to the log, keeping it under about 1 MB.
 log () {
@@ -293,20 +296,26 @@ input_codex () {
 }
 
 # Cursor: hook input fields to variables (https://cursor.com/docs/hooks).
-# The session is the conversation; afterShellExecution has no cwd, so
-# pre-shell remembers it.  Cursor does not document its transcript.
+# The session is the conversation.  Write and Delete name their file in
+# tool_input.file_path; Shell runs in tool_input.cwd, which is empty
+# for the first folder of the workspace.  sessionStart has no cwd: it
+# is that folder too.  The model is "unknown" when Cursor cannot name
+# it.  Cursor does not document its transcript.
 # shellcheck disable=SC2317 # called as input_$agent
 input_cursor () {
 	tool=cursor
 	vars=$(printf '%s' "$input" | jq -r '
 		def s: if type == "string" then . else "" end;
-		[(.conversation_id // .session_id | s), (.cwd | s),
-		 (.workspace_roots | if type == "array" then .[0] else "" end | s),
-		 (.file_path | s), (.command | s), (.model | s)]
+		(.workspace_roots | if type == "array" then .[0] else "" end | s) as $w
+		| ((.cwd | s) as $c | if $c == "" then (.tool_input.cwd | s) else $c end) as $c
+		| [(.conversation_id // .session_id | s),
+		   (if $c == "" then $w elif ($c | startswith("/")) or $w == "" then $c
+		    else $w + "/" + $c end),
+		   (.tool_input.file_path | s), (.tool_input.command | s),
+		   (.model | s | if . == "unknown" then "" else . end)]
 		| @sh' 2>/dev/null) || return 1
 	eval "set -- $vars"
-	sid=$1 cwd=$2 workspace=$3 path=$4 cmd=$5 transcript='' model=$6
-	remember_cwd=1
+	sid=$1 cwd=$2 path=$3 cmd=$4 transcript='' model=$5
 }
 
 # Gemini CLI: hook input fields to variables
@@ -355,6 +364,11 @@ context_codex () {
 # shellcheck disable=SC2317 # called as context_$agent
 context_gemini () {
 	context_claude "$@"
+}
+
+# shellcheck disable=SC2317 # called as context_$agent
+context_cursor () {
+	jq -n --arg c "$1" '{additional_context: $c}' >&3
 }
 
 session_start () {
@@ -503,79 +517,6 @@ begin () {
 	fi
 }
 
-# Record an edit that the agent tells after it made it, with the file
-# $path as it is now and the replacements it made, in .edits of the
-# hook input: [{old_string, new_string}, ...] in the order they were
-# made.  The content before is that of the file with the replacements
-# undone, the last one first.  Where that is not certain, the edit is
-# not recorded, and its lines count as written by a human, never the
-# other way round: a replacement whose new text is empty, or is not
-# found exactly once; and a write of the whole file (empty old text)
-# of a path that git tracks, whose content before is unknown.
-# shellcheck disable=SC2317 # called for agents with an edit event
-record_edit () {
-	test -n "$cwd" || cwd=$workspace
-	test -n "$path" && file_worktree "$path" || return 0
-	test -f "$f" || return 0
-	export GIT_LITERAL_PATHSPECS=1
-	tmp=$(mktemp "${TMPDIR:-/tmp}/agit-hook.XXXXXX") || return 0
-	# The content must be UTF-8 text, which jq keeps as it is.
-	if test "$(jq -Rsj . "$f" 2>/dev/null | cksum)" != "$(cksum <"$f")"
-	then
-		rm -f "$tmp"
-		log "$rel: not UTF-8 text; the edit is not recorded"
-		return 0
-	fi
-	printf '%s' "$input" | jq -j --rawfile cur "$f" '
-		if (.edits | type) != "array" or .edits == [] then "X"
-		else reduce (.edits | reverse[]) as $e ({s: $cur, ok: true, whole: false};
-			if (.ok | not) then .
-			elif ($e | type) != "object" or ($e.old_string | type) != "string"
-			     or ($e.new_string | type) != "string" or $e.new_string == ""
-			then .ok = false
-			elif $e.old_string == "" and $e.new_string == .s
-			then .s = "" | .whole = true
-			else (.s | split($e.new_string)) as $parts
-				| if ($parts | length) == 2
-				  then .s = $parts[0] + $e.old_string + $parts[1]
-				  else .ok = false end
-			end)
-		| if .ok | not then "X" elif .whole then "W" + .s else "E" + .s end
-		end' >"$tmp" 2>/dev/null || { rm -f "$tmp"; log "$rel: cannot read the edit"; return 0; }
-	kind=$(head -c 1 "$tmp")
-	case "$kind" in
-	W)
-		if "$GIT" -C "$top" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1
-		then
-			rm -f "$tmp"
-			log "$rel: a write of the whole file, whose content before is unknown; not recorded"
-			return 0
-		fi ;;
-	E) ;;
-	*)
-		rm -f "$tmp"
-		log "$rel: the replacements cannot be undone with certainty; the edit is not recorded"
-		return 0 ;;
-	esac
-	if ! tail -c +2 "$tmp" >"$tmp.pre"
-	then
-		rm -f "$tmp" "$tmp.pre"
-		return 0
-	fi
-	mv -f "$tmp.pre" "$tmp"
-	# git stamp edit records no model or tool: a begin and an end with
-	# nothing between them do, once for the session in the journal.
-	entries=$("$GIT" -C "$top" stamp list --session "$sid" 2>/dev/null) || entries=
-	case "$nl$entries" in
-	*"${nl}begin "*) ;;
-	*)
-		begin -- "$rel" &&
-		stamp -C "$top" stamp end --session "$sid" -- "$rel" ;;
-	esac
-	stamp -C "$top" stamp edit --session "$sid" --path "$rel" --pre "$tmp"
-	rm -f "$tmp"
-}
-
 pre_commit () {
 	runs_commit || return 0
 	read_conf
@@ -633,31 +574,13 @@ main () {
 		edit_stamps begin ;;
 	post-edit)
 		edit_stamps end ;;
-	edit)
-		record_edit ;;
 	pre-shell)
-		if test -n "$remember_cwd"
-		then
-			state=$home/run/$agent
-			# Once per session, as there is no session-start.
-			if ! test -f "$state/$sid.shell-cwd"
-			then
-				mkdir -p "$state" 2>/dev/null
-				find "$state" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
-			fi
-			printf '%s\n' "$cwd" >"$state/$sid.shell-cwd" 2>/dev/null
-		fi
 		read_conf
 		test "$opt_shell" = true || exit 0
 		moves_head && exit 0
 		worktree "$cwd" || exit 0
 		begin ;;
 	post-shell)
-		if test -z "$cwd" && test -n "$remember_cwd"
-		then
-			cwd=$(cat "$home/run/$agent/$sid.shell-cwd" 2>/dev/null) ||
-			cwd=$workspace
-		fi
 		read_conf
 		test "$opt_shell" = true || exit 0
 		moves_head && exit 0

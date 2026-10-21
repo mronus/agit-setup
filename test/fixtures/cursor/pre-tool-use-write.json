@@ -1,0 +1,16 @@
+{
+  "conversation_id": "5f0e9d1c-2b7a-4c3e-9a51-6d2f8e4b7c10",
+  "generation_id": "a3c1e7f2-8d4b-4e6a-b1f9-0c2d5e8a7b34",
+  "model": "claude-4.5-sonnet",
+  "model_id": "claude-4.5-sonnet",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/home/user/project/hello.txt",
+    "content": "one\nTWO\nthree\n"
+  },
+  "tool_use_id": "toolu_01A2b3C4d5E6f7G8h9J0k1L2",
+  "session_id": "5f0e9d1c-2b7a-4c3e-9a51-6d2f8e4b7c10",
+  "hook_event_name": "preToolUse",
+  "cursor_version": "3.26.13",
+  "workspace_roots": ["/home/user/project"]
+}
