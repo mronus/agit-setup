@@ -70,6 +70,13 @@ fi
 agent=$1
 event=$2
 
+# Cursor runs Claude Code plugins too, with CURSOR_PLUGIN_ROOT set,
+# which Claude Code never sets; its own hooks record its edits.
+if test "$agent" = claude && test -n "$CURSOR_PLUGIN_ROOT"
+then
+	exit 0
+fi
+
 # Append a line to the log, keeping it under about 1 MB.
 log () {
 	{

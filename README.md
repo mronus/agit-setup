@@ -144,7 +144,9 @@ Gemini CLI         yes        yes        no      yes        no
 
 - Cursor needs version 3. The hooks stamp around its agent's `Write`,
   `Delete` and `Shell` tools; the lines of Tab completions and of
-  inline edits (Cmd+K) count as human.
+  inline edits (Cmd+K) count as human. Cursor also runs the hooks of
+  Claude Code plugins; those of the agit plugin then do nothing, so
+  Cursor's work is recorded once, by the Cursor hooks.
 - The summary before a commit comes from the session transcript, whose
   format only Claude Code documents.
 - Gemini CLI does not tell the hooks its model.

@@ -28,7 +28,7 @@ trap 'rm -rf "$tmp"' EXIT
 tmp=$(cd "$tmp" && pwd -P)
 export AGIT_HOME="$tmp/agit-home"
 export AGIT_GIT="$GIT"
-unset CLAUDE_ENV_FILE
+unset CLAUDE_ENV_FILE CURSOR_PLUGIN_ROOT
 export GIT_CONFIG_NOSYSTEM=1
 export HOME="$tmp/home"
 mkdir -p "$HOME" "$AGIT_HOME"
@@ -169,6 +169,26 @@ mkdir -p "$tmp/plain"
 hook session-start "$tmp/plain"
 test -s "$tmp/out" && fail "session-start outside a repository printed: $(cat "$tmp/out")"
 ok "no context outside a repository"
+
+echo "== the Claude Code plugin run by Cursor"
+mv "$AGIT_HOME/run/claude/$sid" "$tmp/claude-state"
+export CURSOR_PLUGIN_ROOT="$root/plugins/claude-code"
+hook session-start "$repo"
+test -s "$tmp/out" && fail "session-start under Cursor printed: $(cat "$tmp/out")"
+test -e "$AGIT_HOME/run/claude/$sid" && fail "session-start under Cursor remembered the model"
+hook pre-edit "$repo" "$repo/hello.txt"
+hook post-edit "$repo" "$repo/hello.txt"
+hook pre-shell "$repo" "echo x >x.txt"
+hook post-shell "$repo" "echo x >x.txt"
+# The plugin runs agit-hook through its own bin/agit-hook.
+input pre-edit "$repo" "$repo/hello.txt" |
+sh "$root/plugins/claude-code/bin/agit-hook" claude pre-edit >"$tmp/out" 2>&1 ||
+fail "the plugin's agit-hook failed under Cursor"
+test -s "$tmp/out" && fail "the plugin's agit-hook printed under Cursor: $(cat "$tmp/out")"
+test -z "$(journal "$repo")" || fail "stamps under Cursor: $(journal "$repo")"
+unset CURSOR_PLUGIN_ROOT
+mv "$tmp/claude-state" "$AGIT_HOME/run/claude/$sid"
+ok "the Claude Code plugin does nothing when Cursor runs it"
 
 echo "== edits"
 hook pre-edit "$repo" "$repo/hello.txt"
