@@ -1,0 +1,50 @@
+version 1
+commit 26a8bf53a11320b551ab4149a2cab9132bbc8084
+capture observed git/2.56.0.agit.2
+actor human human ident=M. Abdullah Onus <mronus@gmail.com>
+file .claude-plugin/marketplace.json
++ 13 HUMAN human 077294332477f58a2407964ec3794b6a7ee014bc
+- 13 HUMAN human b94e1cdde7799964391f89749eab46f5f03747cb
+file README.md
++ 4-5 HUMAN human 6e7490409163af63ebe81afedd129a9be280e8e1
++ 129-131 HUMAN human 776a6974a2f7e178ecb8abe5e9350507ec7ba741
+- 4-6 HUMAN human 043bd37bf759a2f008e7f19798d80807bb968dc4
+- 130-132 HUMAN human 0dfb89dde27ca92f0165a5e56a7e8f31da7c7497
+- 135-138 HUMAN human 312c39a1bb813aa1eceeca803f250f2a254b8485
+file bin/agit-hook
++ 27-28 HUMAN human 058515e5c1d9674e35c2670213701c438cce6638
++ 357-361 HUMAN human 9ca67f12ca2aad70fb06207228d9afe859297707
++ 363-365 HUMAN human 64a387bb90a295fcdc3875eb1a1ec63e50edd822
++ 370-373 HUMAN human a291f503e31425a73c8cec43abcbff28cc6e50e1
+- 27-31 HUMAN human 7a729b2a7b63bc4580fa9f73eea5146afb4097ee
+- 360-366 HUMAN human b5ea6d89d210c3fd9a46c53fb8fbc440beed03df
+- 368-375 HUMAN human f75395b0bc980bd5966075d17bac501cf5434fe6
+- 380-386 HUMAN human 5c07e2144d3d92ddb82b5a1d707e86020a47b188
+file bin/agit-setup
++ 27-28 HUMAN human bec98df03dd059d8a58b13494995fcf3fb19f450
+- 27-28 HUMAN human 730de9e4167e3f28b4eb0fb5b3f12241cae6b81d
+file extensions/gemini/gemini-extension.json
++ 4 HUMAN human fcd89c988e907566c12a0a33e8f6e90a5f8220f3
+- 4 HUMAN human ce560c687f9e44f8f0e52700007452602011dbdc
+file plugins/claude-code/.claude-plugin/plugin.json
++ 3-4 HUMAN human b8ddf58ffc3072e4bb6325c57d06ed17332bd77b
+- 3-4 HUMAN human 8e14566cd58e45c0314b56fe9db60ef5c8c1f14f
+file test/fixtures/claude/transcript.jsonl
++ 4 HUMAN human 44bb3445731b7d9fed2978f9e54a2dfd5d5a429f
+- 4 HUMAN human 5188d7e85a15295db643891bd811fe36c14d7977
+file test/hook-test.sh
++ 159-160 HUMAN human c4a039a1409ca4b50db97423c087ca57c8f2f47a
++ 164 HUMAN human 342cc2e3f25c8934003cb4673250f82e98c47442
++ 217-218 HUMAN human 4fa02a29ffc735577d27d1078538318c0f483f11
++ 450 HUMAN human 6aead86a05b7c2d38cba36884ce6d9ee2f1b13a3
++ 573 HUMAN human 6aead86a05b7c2d38cba36884ce6d9ee2f1b13a3
++ 665 HUMAN human 6aead86a05b7c2d38cba36884ce6d9ee2f1b13a3
+- 159 HUMAN human 1ac9b66ea299cdca5fe0ddb271fab88e924cf1ce
+- 163 HUMAN human f1e27881510b86b9c98b3f9b6d39c5ab7dee6266
+- 216-218 HUMAN human de6b9b27001a0ac6b2e4562981e097003730c800
+- 220 HUMAN human 0b70ceb91447bf3cec3862d4348caa31e6dbda27
+- 232-234 HUMAN human 09ecce165e95914fa4d2898fb702a0711f38dfed
+- 237-247 HUMAN human 609fd9d57162ca58233df30cb4c361591e2a185f
+- 465 HUMAN human 79a9018ae9060df10c621f8a8b2c2ea255cfb4fc
+- 588 HUMAN human 79a9018ae9060df10c621f8a8b2c2ea255cfb4fc
+- 680 HUMAN human 79a9018ae9060df10c621f8a8b2c2ea255cfb4fc
