@@ -2,8 +2,9 @@
 
 [agit](https://github.com/mronus/agit) is a distribution of Git with
 the provenance extension, which records, for each line a commit
-changes, whether an AI agent, a human, or both wrote it. The executable is still `git`, and the
-repositories it works on stay plain Git repositories.
+changes, whether an AI agent, a human, or both wrote it. The
+executable is still `git`, and the repositories it works on stay plain
+Git repositories.
 
 ## Install
 
