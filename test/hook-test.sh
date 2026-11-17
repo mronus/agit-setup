@@ -156,11 +156,12 @@ jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' "$tmp/out" >/dev/nul
 fail "session-start printed no SessionStart JSON: $(cat "$tmp/out")"
 ctx=$(jq -r .hookSpecificOutput.additionalContext "$tmp/out")
 case "$ctx" in
-*"Before each \`git commit\` or \`git commit --amend\`, run \`git stamp reason --session $sid --summary -\` as its own command"*"Edit files and commit in separate commands"*)
+*"stamp reason"*) fail "the context asks for a reason: $ctx" ;;
+*"which of its lines an AI wrote"*"Edit files and commit in separate commands"*)
 	ok "context" ;;
 *) fail "unexpected context: $ctx" ;;
 esac
-grep -qx "export AGIT_SESSION=$sid" "$CLAUDE_ENV_FILE" || fail "AGIT_SESSION not in CLAUDE_ENV_FILE"
+grep -q AGIT_SESSION "$CLAUDE_ENV_FILE" && fail "AGIT_SESSION in CLAUDE_ENV_FILE"
 grep -qxF "if test -f '$AGIT_HOME/env'; then . '$AGIT_HOME/env'; fi" "$CLAUDE_ENV_FILE" ||
 fail "the PATH of agit not in CLAUDE_ENV_FILE: $(cat "$CLAUDE_ENV_FILE")"
 rm "$AGIT_HOME/env"
@@ -213,11 +214,9 @@ printf 'one\nTWO by the agent\nthree by a human\n' >"$repo/hello.txt"
 
 echo "== commit"
 hook pre-shell "$repo" "git add -A && git commit -m 'Add a greeting'"
-# The pre-commit event of earlier versions does nothing, with their
-# hook.reason too: no reason from the transcript, no log.
-"$GIT" config --file "$AGIT_HOME/setup.conf" hook.reason true
+# The pre-commit event of earlier versions does nothing, and logs
+# nothing.
 hook pre-commit "$repo" "git add -A && git commit -m 'Add a greeting'"
-journal "$repo" | grep -q "^reason " && fail "pre-commit recorded a reason: $(journal "$repo")"
 test -e "$AGIT_HOME/log/hook.log" && fail "pre-commit logged: $(cat "$AGIT_HOME/log/hook.log")"
 "$GIT" -C "$repo" add -A
 "$GIT" -C "$repo" commit -q -m "Add a greeting"
@@ -229,21 +228,7 @@ test "$(marks "$repo" hello.txt)" = "2 AI
 test "$(marks "$repo" sub/dir/new.txt)" = "1 AI" || fail "new.txt: $(marks "$repo" sub/dir/new.txt)"
 test "$(marks "$repo" 'nb[1].ipynb')" = "1 AI" || fail "nb[1].ipynb: $(marks "$repo" 'nb[1].ipynb')"
 "$GIT" -C "$repo" provenance show HEAD | grep -q "session=$sid" || fail "no actor for $sid"
-test -z "$("$GIT" -C "$repo" log -1 --format='%(provenance:summary)')" ||
-fail "a summary without a reason from the agent"
-"$GIT" config --file "$AGIT_HOME/setup.conf" --unset hook.reason
 ok "commit, and pre-commit does nothing"
-
-echo "== the agent's reason"
-hook pre-edit "$repo" "$repo/hello.txt"
-echo four >>"$repo/hello.txt"
-hook post-edit "$repo" "$repo/hello.txt"
-echo "The agent's own summary." |
-"$GIT" -C "$repo" stamp reason --session "$sid" --summary -
-"$GIT" -C "$repo" commit -q -am four
-test "$("$GIT" -C "$repo" log -1 --format='%(provenance:summary)')" = "The agent's own summary." ||
-fail "summary is not the agent's"
-ok "the agent's summary"
 
 echo "== shell commands"
 hook pre-shell "$repo" "echo made by a command >shell.txt"
@@ -462,7 +447,7 @@ fixture session-start '.session_id = $s | .cwd = $c' --arg s "$sid" --arg c "$cx
 run_hook session-start
 if ! jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' "$tmp/out" >/dev/null ||
    ! jq -r .hookSpecificOutput.additionalContext "$tmp/out" |
-   grep -qF "git stamp reason --session $sid --summary -"
+   grep -qF "Edit files and commit in separate commands"
 then
 	fail "codex session-start: $(cat "$tmp/out")"
 fi
@@ -585,7 +570,7 @@ cursor_tool () {
 fixture session-start '.conversation_id = $s | .session_id = $s | .workspace_roots = [$w]' \
 	--arg s "$sid" --arg w "$cu" | run_hook session-start
 if ! jq -r .additional_context "$tmp/out" |
-   grep -qF "git stamp reason --session $sid --summary -"
+   grep -qF "Edit files and commit in separate commands"
 then
 	fail "cursor session-start: $(cat "$tmp/out")"
 fi
@@ -677,7 +662,7 @@ gemini_tool () {
 fixture session-start '.session_id = $s | .cwd = $c' --arg s "$sid" --arg c "$ge" |
 run_hook session-start
 if ! jq -r .hookSpecificOutput.additionalContext "$tmp/out" |
-   grep -qF "git stamp reason --session $sid --summary -"
+   grep -qF "Edit files and commit in separate commands"
 then
 	fail "gemini session-start: $(cat "$tmp/out")"
 fi

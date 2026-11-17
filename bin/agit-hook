@@ -24,11 +24,8 @@
 #                  in the worktree it works in (see shell_dir)
 #   post-shell     git stamp end, whole tree, after it
 #
-# The reasoning of a commit is the agent's own: the context asks it to
-# record it with git stamp reason, and git commit warns when it did
-# not.  The pre-commit event of earlier versions, which wrote one from
-# the transcript, does nothing: the hooks of an older plugin may still
-# run it.
+# The pre-commit event of earlier versions does nothing: the hooks of
+# an older plugin may still run it.
 #
 # The script never fails and never blocks the agent: it exits 0, prints
 # nothing but the session context, and logs its errors to
@@ -357,33 +354,23 @@ session_start () {
 	esac
 	command -v "context_$agent" >/dev/null || exit 0
 
-	# The context names the session itself rather than $AGIT_SESSION:
-	# permission rules such as Bash(git *) do not match a command with
-	# a variable in it.  Claude Code sources $CLAUDE_ENV_FILE before
-	# each shell command: $home/env puts agit first on PATH there, so
-	# that the commits of the agent are made by agit even when it was
-	# started from a shell without it.
-	if test -n "$CLAUDE_ENV_FILE"
+	# Claude Code sources $CLAUDE_ENV_FILE before each shell command:
+	# $home/env puts agit first on PATH there, so that the commits of
+	# the agent are made by agit even when it was started from a shell
+	# without it.
+	if test -n "$CLAUDE_ENV_FILE" && test -f "$home/env"
 	then
-		{
-			printf 'export AGIT_SESSION=%s\n' "$sid"
-			if test -f "$home/env"
-			then
-				e=$(printf '%s' "$home/env" | sed "s/'/'\\\\''/g")
-				printf "if test -f '%s'; then . '%s'; fi\n" "$e" "$e"
-			fi
-		} >>"$CLAUDE_ENV_FILE"
+		e=$(printf '%s' "$home/env" | sed "s/'/'\\\\''/g")
+		printf "if test -f '%s'; then . '%s'; fi\n" "$e" "$e" \
+			>>"$CLAUDE_ENV_FILE"
 	fi
 
 	worktree "$cwd" || exit 0
 	"context_$agent" "This machine's git is agit: each commit records which \
-lines an AI wrote and why. Hooks record your edits. Before each \
-\`git commit\` or \`git commit --amend\`, run \
-\`git stamp reason --session $sid --summary -\` as its own command, with \
-a few sentences on stdin saying why you made the changes. Edit files and \
-commit in separate commands; edits made in the commit's own command are \
-not recorded. Do not pass \`--session\` to \`git commit\`, and never \
-run \`git stamp begin\`, \`end\` or \`edit\`."
+of its lines an AI wrote. Hooks record your edits. Edit files and commit \
+in separate commands; edits made in the commit's own command are not \
+recorded. Do not pass \`--session\` to \`git commit\`, and never run \
+\`git stamp begin\`, \`end\` or \`edit\`."
 }
 
 # The model of the session: the one in the hook input, else the one
