@@ -1,0 +1,41 @@
+version 1
+commit 35ca2326ff3991747739af3650099207f495f70d
+session a0256ef8-d274-460b-a4e6-84682b59e3d3 model=claude-opus-5-5 tool=claude-code started=1794946080 ended=1794946082
+
+Request: I want you to handle the adapter part too in the ../agit-setup repo
+
+Deleting the branch was blocked. I'll do only the safe part (switch to master) and leave the deletion for you to confirm.
+
+Both briefs are ready. Starting the two Opus subagents in parallel: one for agit, one for agit-setup.
+
+While they run, I'll note the decision in memory so future sessions don't assume reasoning is still part of the design.
+
+I took the forward-fix route (no master rewrite) and two subagents are now working in parallel:
+
+1. **agit:** branch `agit/drop-reasoning` from `origin/master`. It removes reasoning everywhere:
+   - **Capture:** `git stamp reason` and the journal's `reason` entries.
+   - **Commit and rewrites:** commits and rebase/cherry-pick/am/merge/adopt/remap stop writing or carrying reasoning records.
+   - **Viewing:** `show --reasoning` and `%(provenance:summary)`.
+   - **Transfer:** the `provenance.reasoning.*` options and the reasoning refs in fetch/push/clone.
+   - **Purge:** the whole `git provenance purge` command and its advice.
+   - **Docs, tests and build files.**
+
+   Line attribution, `git commit --session`, `prune` and the `--session` hint stay. Journals written by the old version that still hold `reason` entries must not break `git commit`, and that case gets a test.
+2. **agit-setup:** branch `drop-reasoning` from `origin/main`. The session context will no longer tell agents to run `git stamp reason`. It also drops the `AGIT_SESSION` export, which only that command used, and cleans the README and tests. Those tests still have to pass against the current `2.56.0.agit.2` release, so this PR can be merged first.
+
+Both open PRs and don't wait for CI. I'll check the CI runs and review the diffs before calling either PR good.
+
+**Waiting on you:**
+- **Old warning branch:** the permission check blocked deleting `agit/warn-missing-reasoning` locally and on origin. To drop it, run:
+  `! git branch -D agit/warn-missing-reasoning && git push origin --delete agit/warn-missing-reasoning`
+  Your checkout is now on master.
+- **Reasoning ref on origin:** `refs/provenance/reasoning` still exists there. After the agit PR merges I'd delete it with `git push origin :refs/provenance/reasoning`. Do you want that?
+- **Release:** `2.56.0.agit.3` would follow the merge as its own PR, with release notes telling users they can delete their local reasoning ref.
+
+I also recorded the decision in my project memory.
+
+I'll check two claims in that report before relaying it: that the repo moved, and that the release `git commit` warns about missing reasoning.
+
+The adapter diff is clean. One nit: the README intro line was re-wrapped to about 95 columns. I'll fix that on the PR branch, then update the repo-name memory.
+
+The force-push was blocked. I'll put the fix in a separate small commit instead, after checking whether the edit was applied.
