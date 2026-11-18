@@ -1,7 +1,7 @@
 {"type":"user","message":{"role":"user","content":"Rename the old helper."},"isSidechain":false,"sessionId":"test-session"}
 {"type":"assistant","message":{"role":"assistant","model":"claude-older-model","content":[{"type":"text","text":"Renamed the old helper."}]},"isSidechain":false,"sessionId":"test-session"}
 {"type":"user","message":{"role":"user","content":"Add a greeting to hello.txt and a list of names."},"isSidechain":false,"sessionId":"test-session"}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Not part of the summary."}]},"isSidechain":false,"sessionId":"test-session"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Thinking without a model."}]},"isSidechain":false,"sessionId":"test-session"}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I will add the greeting first."}]},"isSidechain":false,"sessionId":"test-session"}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Edit","input":{"file_path":"hello.txt"}}]},"isSidechain":false,"sessionId":"test-session"}
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"isSidechain":false,"sessionId":"test-session"}

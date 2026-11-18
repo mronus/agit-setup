@@ -1,10 +1,10 @@
 # agit-setup
 
 [agit](https://github.com/mronus/agit) is a distribution of Git with
-the provenance extension, which records, for each commit, the AI
-reasoning behind it and, for each changed line, whether an AI agent, a
-human, or both wrote it. The executable is still `git`, and the
-repositories it works on stay plain Git repositories.
+the provenance extension, which records, for each line a commit
+changes, whether an AI agent, a human, or both wrote it. The
+executable is still `git`, and the repositories it works on stay plain
+Git repositories.
 
 ## Install
 
@@ -127,14 +127,10 @@ command                            so files written by commands count as
                                    command works in: that of a leading
                                    cd <dir> or of git -C <dir>, else that
                                    of the agent's directory
-at the start of a session          tell the agent to record why it made
-                                   its changes, with git stamp reason,
-                                   before each commit
+at the start of a session          tell the agent that its edits are
+                                   recorded, and to edit files and
+                                   commit in separate commands
 ```
-
-The reasoning of a commit is what the agent records; the hooks do not
-write one for it. When a commit has lines an AI wrote and no
-reasoning, `git commit` warns and says how to add it.
 
 What each agent records:
 

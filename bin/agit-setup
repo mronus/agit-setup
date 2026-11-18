@@ -24,8 +24,8 @@ usage: agit-setup
    or: agit-setup remove <agent>
    or: agit-setup status [<agent>]
 
-Connect coding agents to agit, so that the lines they write, and why
-they wrote them, are recorded in the provenance of your commits.
+Connect coding agents to agit, so that the lines they write are
+recorded in the provenance of your commits.
 
 Without a command, ask which agents to connect and how.
 
