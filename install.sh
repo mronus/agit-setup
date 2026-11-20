@@ -7,7 +7,7 @@
 # github.com/mronus/agit-setup.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mronus/agit-setup/main/install.sh | sh
-#   curl -fsSL .../install.sh | sh -s -- --version 2.56.0.agit.2
+#   curl -fsSL .../install.sh | sh -s -- --version 2.56.0.agit.3
 #
 # Without root and without touching Homebrew or system files, the
 # release is unpacked into $prefix/versions/<version>, $prefix/current
@@ -31,7 +31,7 @@ usage: install.sh [<options>]
 Install agit, Git with the provenance extension, and make it the
 default git for your user.
 
-    --version <version>  release to install, e.g. 2.56.0.agit.2
+    --version <version>  release to install, e.g. 2.56.0.agit.3
                          (default: \$AGIT_VERSION, else the latest)
     --prefix <dir>       where to install (default: \$AGIT_HOME,
                          else ~/.agit)

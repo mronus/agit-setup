@@ -61,7 +61,7 @@ Options, after `sh -s --` when piping:
 For example:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mronus/agit-setup/main/install.sh | sh -s -- --version 2.56.0.agit.2
+curl -fsSL https://raw.githubusercontent.com/mronus/agit-setup/main/install.sh | sh -s -- --version 2.56.0.agit.3
 ```
 
 Running it again installs the requested version next to the others
