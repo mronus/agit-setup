@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 env:
-  AGIT_TEST_VERSION: 2.56.0.agit.2
+  AGIT_TEST_VERSION: 2.56.0.agit.3
   # A release without prebuilt tarballs.
   AGIT_TEST_BAD_VERSION: 2.56.0.agit.1
   # install.sh installs agit-setup from this commit.
